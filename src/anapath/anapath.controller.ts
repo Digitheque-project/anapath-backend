@@ -15,6 +15,7 @@ import { PrescriptionTokenMonitorService } from '../common/clients/prescription-
 import { NotificationService } from '../notification/notification.service';
 import { NotificationType } from '../notification/dto/receive-notification.dto';
 import { Permissions } from '../auth/decorators/permissions.decorator';
+import { Public } from '../auth/decorators/public.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CurrentToken } from '../auth/decorators/current-token.decorator';
 import { AuthenticatedUser } from '../auth/types/authenticated-user.interface';
@@ -72,6 +73,19 @@ export class AnapathController {
   ) {
     const rows = await this.anapathService.findAll(patientId);
     return this.enrichExamensPatient(rows, this.decodeAnapathContext(token), token);
+  }
+
+  @Public()
+  @Get('internal/resultats/patient/:patientId')
+  @ApiOperation({ summary: 'Résultats anapath pour un patient — accès interne (service-to-service)' })
+  @ApiResponse({ status: 200, description: 'Résultats filtrés par patient', type: [AnapathRequest] })
+  @Header('Content-Type', 'application/json; charset=utf-8')
+  async findResultsForPatient(@Param('patientId') patientId: string) {
+    const rows = await this.anapathService.findAll(patientId);
+    const filtered = rows.filter(r =>
+      r.resultat && (r.statut === Statut.RESULTAT_DISPONIBLE || r.statut === Statut.VALIDE)
+    );
+    return this.enrichExamensPatient(filtered, {}, undefined);
   }
 
   @Permissions('anapath:update')
