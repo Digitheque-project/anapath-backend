@@ -20,13 +20,9 @@ export class UserServiceClient {
     this.baseUrl = (
       configService?.get<string>('USER_SERVICES_URL') ??
       process.env.USER_SERVICES_URL ??
-      'https://user-services-0sze.onrender.com'
+      'https://gateway-bwm4.onrender.com'
     ).replace(/\/$/, '');
-    this.timeout = Number(
-      configService?.get<string>('USER_SERVICES_TIMEOUT_MS') ??
-        process.env.USER_SERVICES_TIMEOUT_MS ??
-        20000,
-    );
+    this.timeout = 20000;
   }
 
   private userIdFromToken(token: string): string | null {

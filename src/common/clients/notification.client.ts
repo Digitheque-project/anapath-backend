@@ -4,7 +4,7 @@ import axios from 'axios';
 
 /**
  * Client vers le service Notification externe dédié (aucune authentification requise,
- * vérifié empiriquement). URL : NOTIFICATION_SERVICE_URL (défaut https://service-notification-nlqp.onrender.com).
+ * vérifié empiriquement). URL : NOTIFICATION_SERVICE_URL (défaut https://gateway-bwm4.onrender.com).
  *
  * Les erreurs du service externe sont LOGGÉES (jamais silencieuses) afin de distinguer
  * « rien à afficher » d'« API externe injoignable » : un catch silencieux ferait croire
@@ -21,7 +21,7 @@ export class NotificationClient {
     this.baseUrl = (
       this.configService?.get<string>('NOTIFICATION_SERVICE_URL') ??
       process.env.NOTIFICATION_SERVICE_URL ??
-      'https://service-notification-nlqp.onrender.com'
+      'https://gateway-bwm4.onrender.com'
     ).replace(/\/$/, '');
     this.serviceId =
       this.configService?.get<string>('ANAPATH_SERVICE_ID') ??
@@ -40,19 +40,6 @@ export class NotificationClient {
     } catch (e) {
       this.logger.warn(
         `getNotificationsForUser(${userId}) échoué (${this.baseUrl}): ${e instanceof Error ? e.message : e}`,
-      );
-      return [];
-    }
-  }
-
-  /** Toutes les notifications, tous utilisateurs confondus — pas de filtre par service côté API. */
-  async getAllNotifications(): Promise<any[]> {
-    try {
-      const { data } = await axios.get(`${this.baseUrl}/notifications`, { timeout: this.timeout });
-      return Array.isArray(data) ? data : [];
-    } catch (e) {
-      this.logger.warn(
-        `getAllNotifications échoué (${this.baseUrl}): ${e instanceof Error ? e.message : e}`,
       );
       return [];
     }

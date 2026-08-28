@@ -45,7 +45,7 @@ export class AuthServiceTokenService {
     this.authServiceUrl = (
       configService?.get<string>('AUTH_SERVICE_URL') ??
       process.env.AUTH_SERVICE_URL ??
-      'https://auth-service-4q6g.onrender.com'
+      'https://gateway-bwm4.onrender.com'
     ).replace(/\/$/, '');
     this.email =
       configService?.get<string>('PRESCRIPTION_SERVICE_ACCOUNT_EMAIL') ??

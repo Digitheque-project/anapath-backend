@@ -114,8 +114,18 @@ export class AnapathRequest {
   @Column({ nullable: true })
   validatedByUserId: string;
 
+  // Nom réel de l'utilisateur ayant validé (compte pathologiste) — l'ID
+  // stocké dans validatedByUserId est en fait le numéro d'ordre saisi.
+  @Column({ type: 'text', nullable: true })
+  validatedByName: string | null;
+
   @Column({ type: 'timestamp', nullable: true })
   validatedAt: Date;
+
+  // Id de l'examen complémentaire correspondant dans le service dossier-patient
+  // (renseigné après l'envoi du compte-rendu ; null = pas encore envoyé).
+  @Column({ nullable: true })
+  dossierPatientId: string;
 
   @Column({ nullable: true })
   validationHash: string;

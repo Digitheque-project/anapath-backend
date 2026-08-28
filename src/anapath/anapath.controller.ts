@@ -85,6 +85,54 @@ export class AnapathController {
   }
 
   @Permissions('anapath:read')
+  @Get('prescriptions/externes/:prescriptionId/demandes/:demandeId')
+  @ApiOperation({
+    summary:
+      "Détails à jour d'une demande de prescription externe (service Prescription) — utilisé par la cloche pour afficher toutes les informations saisies",
+  })
+  @Header('Content-Type', 'application/json; charset=utf-8')
+  getPrescriptionExterneDetails(
+    @Param('prescriptionId') prescriptionId: string,
+    @Param('demandeId') demandeId: string,
+    @CurrentToken() token: string,
+  ) {
+    return this.anapathService.getPrescriptionDemandeDetails(
+      token,
+      prescriptionId,
+      demandeId,
+    );
+  }
+
+  @Permissions('anapath:read')
+  @Get('patients/:patientId/dossier-patient')
+  @ApiOperation({
+    summary:
+      "Dossier patient : tous les examens complémentaires du patient enregistrés par l'ensemble des services du CHU (dossier-patient)",
+  })
+  @ApiParam({ name: 'patientId', description: 'UUID du patient (service Accueil)' })
+  @Header('Content-Type', 'application/json; charset=utf-8')
+  getDossierPatient(
+    @Param('patientId') patientId: string,
+    @Query('chuId') chuId?: string,
+  ) {
+    return this.anapathService.getDossierPatient(patientId, chuId);
+  }
+
+  // Alias du contrat « Résultats paracliniques » (agrégateur dossier-patient) :
+  // même handler, chemins préfixés /anapath au cas où l'agrégateur appelle
+  // {baseUrl}/anapath/… — volontairement SANS @Permissions pour accepter le
+  // compte de service de n'importe quel service du CHU.
+  @Get(['resultats/patient/:patientId', 'patients/:patientId/resultats'])
+  @ApiOperation({ summary: 'Résultats paracliniques anapath d’un patient (alias contrat agrégateur)' })
+  @ApiParam({ name: 'patientId', description: 'UUID du patient (service Accueil)' })
+  getResultatsParacliniques(
+    @Param('patientId') patientId: string,
+    @Query('chuId') chuId?: string,
+  ) {
+    return this.anapathService.getResultatsParacliniquesPatient(patientId, chuId);
+  }
+
+  @Permissions('anapath:read')
   @Get('prescriptions/sync-status')
   @ApiOperation({
     summary: "Statut du token utilisé par le cron/WebSocket Prescription (expiration, etc.) — PRESCRIPTION_CRON_JWT n'est pas un token de service durable",
@@ -162,7 +210,7 @@ export class AnapathController {
     // plus les nouvelles demandes (ni la cloche d'acceptation/refus).
     locales = this.filterNotificationsForUser(locales, user);
     const enriched = await Promise.all(
-      locales.map(async (n: any) => this.enrichNotification(n, ctx)),
+      locales.map(async (n: any) => this.enrichNotification(n, ctx, token)),
     );
     return sortNotifications(enriched);
   }
@@ -179,7 +227,7 @@ export class AnapathController {
     let locales = await this.notificationService.findUnread();
     locales = this.filterNotificationsForUser(locales, user);
     const enriched = await Promise.all(
-      locales.map(async (n: any) => this.enrichNotification(n, ctx)),
+      locales.map(async (n: any) => this.enrichNotification(n, ctx, token)),
     );
     return sortNotifications(enriched);
   }
@@ -204,7 +252,7 @@ export class AnapathController {
     // des demandes qu'il ne peut ni accepter ni refuser.
     locales = locales.filter((n: any) => shouldNotifyUser(n, user));
     const enriched = await Promise.all(
-      locales.map(async (n: any) => this.enrichNotification(n, ctx)),
+      locales.map(async (n: any) => this.enrichNotification(n, ctx, token)),
     );
     return sortNotifications(enriched);
   }
@@ -226,7 +274,7 @@ export class AnapathController {
    * Contexte du service Anapath connecté (décodé du JWT de la session) : le CHU de
    * l'utilisateur — source du champ affiché « CHU ». Le « Service demandeur » (le
    * service émetteur de la prescription, serviceIdSource) est résolu via le
-   * service-service dédié (https://service-service-0f7p.onrender.com, GET /services/{id})
+   * service-service dédié (via le gateway central, GET /services/{id})
    * dans anapathService.getServiceNom (cf. enrichChuServiceExamen).
    */
   private decodeAnapathContext(token?: string): { serviceName?: string; chuName?: string } {
@@ -272,6 +320,7 @@ export class AnapathController {
   private async enrichNotification(
     n: any,
     ctx?: { serviceName?: string; chuName?: string },
+    token?: string,
   ): Promise<any> {
     if (!n || typeof n !== 'object') return n;
     n = this.appliquerContexteAffichage(n, ctx);
@@ -322,6 +371,30 @@ export class AnapathController {
       ((examen?.metadata?.chuId as string) ??
         (n.metadata?.chuId as string)) ??
       '';
+
+    // Nom du service demandeur / CHU : réutilise celui stocké, sinon le résout
+    // best-effort (caches 5 min côté service) — jamais un UUID brut à l'écran.
+    let serviceNom: string | null =
+      (examen?.metadata?.serviceNom as string) ??
+      (n.metadata?.serviceNom as string) ??
+      null;
+    if (!serviceNom) {
+      const sid =
+        (examen?.metadata?.serviceIdSource as string) ??
+        (examen?.metadata?.serviceIdDest as string) ??
+        (n.metadata?.serviceIdSource as string) ??
+        (n.metadata?.serviceIdDest as string) ??
+        '';
+      serviceNom = await this.anapathService.getServiceNom(token, sid, chuId);
+    }
+    let chuNom: string | null =
+      (examen?.metadata?.chuNom as string) ??
+      (n.metadata?.chuNom as string) ??
+      null;
+    if (!chuNom && chuId) {
+      chuNom = await this.anapathService.getChuNom(token, chuId);
+    }
+
     const info = (examen?.patientInfo as any) ?? null;
 
     let patientName = patientId || '—';
@@ -340,13 +413,40 @@ export class AnapathController {
       }
     }
 
+    let allergies: string | null = null;
+    if (typeof info?.allergie === 'string' && info.allergie.trim()) {
+      allergies = info.allergie.trim();
+    } else if (patientId && chuId) {
+      try {
+        const fetched = await this.accueilClient.getAllergie(patientId, chuId);
+        if (fetched?.trim()) allergies = fetched.trim();
+      } catch {
+        // Non bloquant
+      }
+    }
+
     return {
       ...base,
       enriched: {
         ...(base.enriched ?? {}),
         patientId,
         patientName,
+        allergies,
+        serviceNom: serviceNom ?? undefined,
+        chuNom: chuNom ?? undefined,
       },
+      // Miroir dans metadata pour que le front (fallback metadata.serviceNom)
+      // et les prochains rendus trouvent le nom sans nouvel appel externe.
+      metadata:
+        base.metadata && typeof base.metadata === 'object'
+          ? {
+              ...base.metadata,
+              ...(serviceNom && !base.metadata.serviceNom
+                ? { serviceNom }
+                : {}),
+              ...(chuNom && !base.metadata.chuNom ? { chuNom } : {}),
+            }
+          : base.metadata,
     };
   }
 
@@ -729,10 +829,22 @@ export class AnapathController {
     if (dto.statut === Statut.ANNULEE && !user.permissions.includes('anapath:cancel')) {
       throw new ForbiddenException('Permission refusée');
     }
+    // Seul le pathologiste valide un examen (statut VALIDE) : contrôle par
+    // nom de rôle ou permission dédiée — le front masque déjà le bouton.
+    if (dto.statut === Statut.VALIDE) {
+      const isPathologiste =
+        /patholog/i.test(user.roleName ?? '') ||
+        user.permissions.includes('anapath:validate');
+      if (!isPathologiste) {
+        throw new ForbiddenException('Validation réservée au pathologiste');
+      }
+    }
     return this.anapathService.update(id, dto, token);
   }
 
-  @Permissions('anapath:observation:write')
+  // Saisie/auto-save du résultat : réservée aux SECRÉTAIRES et au PATHOLOGISTE
+  // (nom de rôle ou permission anapath:observation:write). Le technicien et le
+  // major sont refusés — la saisie ne leur est même pas affichée côté front.
   @Patch(':id/resultat')
   @ApiOperation({ summary: "Enregistrer (auto-save) le résultat et la conclusion d'examen — transcription" })
   @ApiParam({ name: 'id', description: 'UUID de la demande' })
@@ -743,8 +855,15 @@ export class AnapathController {
   updateResultat(
     @Param('id') id: string,
     @Body() dto: UpdateResultatDto,
+    @CurrentUser() user: AuthenticatedUser,
     @CurrentToken() token: string,
   ) {
+    const autorise =
+      /secretair|patholog/i.test(user.roleName ?? '') ||
+      user.permissions.includes('anapath:observation:write');
+    if (!autorise) {
+      throw new ForbiddenException('Saisie du résultat réservée aux secrétaires et au pathologiste');
+    }
     return this.anapathService.updateResultat(id, dto, token);
   }
 
@@ -783,7 +902,7 @@ export class AnapathController {
     return this.anapathService.validerExamenTechnique(id, dto, token);
   }
 
-  @Permissions('anapath:observation:write')
+  @Permissions('anapath:validate')
   @Patch(':id/diagnostic-cytoponction')
   @ApiOperation({ summary: "Valider le diagnostic cytoponction (pathologiste) — site prélevé, organe, fixation ; bascule la demande en EN_COURS et notifie le technicien que le patient est prêt pour un examen technique" })
   @ApiParam({ name: 'id', description: 'UUID de la demande' })

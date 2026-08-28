@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { AnapathService } from './anapath.service';
 import { AnapathController } from './anapath.controller';
+import { ResultatsParacliniquesController } from './resultats-paracliniques.controller';
 import { AnapathRequest } from './entities/anapath-request.entity';
 import { ReportSettings } from './entities/report-settings.entity';
 import { ChuClient } from '../common/clients/chu.client';
@@ -14,11 +15,12 @@ import { PrescriptionRealtimeService } from '../common/clients/prescription-real
 import { PrescriptionTokenMonitorService } from '../common/clients/prescription-token-monitor.service';
 import { AuthServiceTokenService } from '../common/clients/auth-service-token.service';
 import { UserServiceClient } from '../common/clients/user-service.client';
+import { DossierPatientClient } from '../common/clients/dossier-patient.client';
 import { NotificationModule } from '../notification/notification.module';
 
 @Module({
   imports: [TypeOrmModule.forFeature([AnapathRequest, ReportSettings]), NotificationModule, JwtModule.register({})],
-  controllers: [AnapathController],
+  controllers: [AnapathController, ResultatsParacliniquesController],
   providers: [
     AnapathService,
     NotificationClient,
@@ -30,6 +32,7 @@ import { NotificationModule } from '../notification/notification.module';
     PrescriptionTokenMonitorService,
     AuthServiceTokenService,
     UserServiceClient,
+    DossierPatientClient,
   ],
   exports: [AnapathService],
 })

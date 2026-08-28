@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, MiddlewareConsumer, NestModule, RequestMethod } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -9,11 +9,13 @@ import { AppService } from './app.service';
 import { AnapathModule } from './anapath/anapath.module';
 import { NotificationModule } from './notification/notification.module';
 import { ProfileModule } from './profile/profile.module';
+import { DebugController } from './debug/debug.controller';
 import { AnapathRequest } from './anapath/entities/anapath-request.entity';
 import { NotificationEntity } from './notification/notification.entity';
 import { AuthClient } from './auth/clients/auth.client';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from './auth/guards/permissions.guard';
+import { ProbeRecorderMiddleware } from './common/probe-recorder.middleware';
 
 @Module({
   imports: [
@@ -53,7 +55,7 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
     AnapathModule,
     NotificationModule,
   ],
-  controllers: [AppController],
+  controllers: [AppController, DebugController],
   providers: [
     AppService,
     AuthClient,
@@ -63,4 +65,9 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
     { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  // TEMPORAIRE : capture de toutes les requêtes entrantes (voir probe-store).
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(ProbeRecorderMiddleware).forRoutes({ path: '*', method: RequestMethod.ALL });
+  }
+}

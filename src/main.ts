@@ -6,7 +6,6 @@ import { IoAdapter } from '@nestjs/platform-socket.io';
 import { AppModule } from './app.module';
 import { Utf8Interceptor } from './common/interceptors/utf8.interceptor';
 import { Utf8Pipe } from './common/pipes/utf8.pipe';
-import { AccueilClient } from './common/clients/accueil.client';
 import { getCorsOrigins } from './common/cors-origins';
 
 async function bootstrap() {
@@ -53,8 +52,7 @@ async function bootstrap() {
   const port = process.env.PORT || 3334;
   await app.listen(port);
 
-  new AccueilClient();
-  const cmsUrl = process.env.CHU_CMS_SERVICE_URL ?? 'https://chu-service-cms7.onrender.com';
+  const cmsUrl = process.env.CHU_CMS_SERVICE_URL ?? 'https://gateway-bwm4.onrender.com';
   console.log(`✅ Service CHU configuré : ${cmsUrl}`);
 
   console.log(`🚀 Backend Anapath démarré sur http://localhost:${port}`);

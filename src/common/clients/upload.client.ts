@@ -18,7 +18,7 @@ export class UploadClient {
     this.baseUrl = (
       configService?.get<string>('UPLOAD_SERVICE_URL') ??
       process.env.UPLOAD_SERVICE_URL ??
-      'https://service-upload-u5z9.onrender.com'
+      'https://gateway-bwm4.onrender.com'
     ).replace(/\/$/, '');
     this.apiKey =
       configService?.get<string>('UPLOAD_API_KEY') ??

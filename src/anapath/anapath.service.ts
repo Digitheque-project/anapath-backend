@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { Cron } from '@nestjs/schedule';
 import { AnapathRequest, Statut, ExamenType } from './entities/anapath-request.entity';
 import { ReportSettings } from './entities/report-settings.entity';
@@ -16,6 +16,7 @@ import { PrescriptionClient, AnapathPrescription, PrescriptionDemande } from '..
 import { ChuClient } from '../common/clients/chu.client';
 import { ServiceServiceClient } from '../common/clients/service.client';
 import { AccueilClient } from '../common/clients/accueil.client';
+import { DossierPatientClient } from '../common/clients/dossier-patient.client';
 import { NotificationService } from '../notification/notification.service';
 import { NotificationType } from '../notification/dto/receive-notification.dto';
 import { AuthServiceTokenService } from '../common/clients/auth-service-token.service';
@@ -59,8 +60,193 @@ export class AnapathService {
     private readonly chuClient: ChuClient,
     private readonly serviceServiceClient: ServiceServiceClient,
     private readonly accueilClient: AccueilClient,
+    private readonly dossierPatientClient: DossierPatientClient,
     private readonly userServiceClient: UserServiceClient,
   ) {}
+
+  /**
+   * Résultats paracliniques anapath d'un patient, au format de la vue unifiée
+   * « Résultats paracliniques » du dossier-patient (celle que consomme l'onglet
+   * du même nom dans les services du CHU, ex. ORL). Chaque item expose à la
+   * fois les noms de champs de la vue unifiée (examen, dateResultat,
+   * resultatTexte…) et des alias de compatibilité pour les adaptateurs
+   * existants (compteRendu, conclusion, dateExamen…).
+   */
+  async getResultatsParacliniquesPatient(patientId: string, chuId?: string): Promise<any[]> {
+    if (!patientId) return [];
+    const examens = await this.anapathRepository.find({
+      where: { patientId, statut: In([Statut.VALIDE, Statut.ARCHIVE]) },
+    });
+    const items = examens
+      .filter((e) => !chuId || String((e.metadata as any)?.chuId ?? '') === chuId)
+      .map((e) => {
+        const meta = (e.metadata ?? {}) as Record<string, unknown>;
+        const typeLabel = TYPE_EXAMEN_LABELS[e.typeExamen] ?? e.typeExamen;
+        const titre = `Compte-rendu anapath – ${typeLabel}`;
+        const dateDemande = (e.createdAt ?? new Date()).toISOString();
+        const dateResultat = e.validatedAt ? new Date(e.validatedAt).toISOString() : null;
+        const prescripteur =
+          (meta.prescripteurNom as string) ?? (meta.nomMedecinPrescripteur as string) ?? '';
+        return {
+          id: e.id,
+          prescriptionId: e.prescriptionId ?? '',
+          demandeId: e.demandeId ?? '',
+          patientId: e.patientId,
+          chuId: (meta.chuId as string) ?? '',
+          // Vue unifiée « Résultats paracliniques »
+          type: 'anatomopathologie',
+          examen: titre,
+          dateDemande,
+          dateResultat,
+          resultatTexte: e.resultatDetails ?? '',
+          resultatFichiers: [] as string[],
+          prescripteur,
+          statut: 'disponible',
+          commentaire: e.resultatConclusion ?? '',
+          serviceSource: 'Anapath',
+          // Alias de compatibilité
+          titre,
+          examinationType: 'AUTRE',
+          dateExamen: dateResultat ?? dateDemande,
+          resultats: e.resultatDetails ?? '',
+          compteRendu: e.resultatDetails ?? '',
+          conclusion: e.resultatConclusion ?? '',
+          interpretation: '',
+          medecin: prescripteur,
+          laboratoire: 'Anapath',
+          pieceJointeUrls: [] as string[],
+          fichierUrls: [] as string[],
+          createdBy: (meta.prescripteurId as string) ?? ANAPATH_SERVICE_ID,
+          createdAt: dateDemande,
+          updatedAt: dateResultat ?? dateDemande,
+        };
+      });
+    items.sort(
+      (a, b) => new Date(b.dateDemande).getTime() - new Date(a.dateDemande).getTime(),
+    );
+    return items;
+  }
+
+  /**
+   * Dossier patient complet : tous les examens/comptes-rendus du patient dans
+   * le CHU, en fusionnant les DEUX sources du service dossier-patient :
+   *  1. les résultats paracliniques agrégés (ECG, imagerie, kiné…)
+   *  2. les examens complémentaires (dont les comptes-rendus anapath)
+   * Rattrapage intégré : les examens anapath déjà validés dont le compte-rendu
+   * n'a pas pu être envoyé sont poussés maintenant — une seule fois via
+   * dossierPatientId.
+   */
+  async getDossierPatient(patientId: string, chuId?: string): Promise<{ items: any[]; total: number }> {
+    if (!patientId) throw new BadRequestException('patientId requis');
+    if (!chuId) throw new BadRequestException('chuId requis');
+
+    const [agreges, complementaires] = await Promise.all([
+      this.dossierPatientClient.getPatientAggregatedResults(patientId, chuId),
+      this.dossierPatientClient.getPatientExaminations(chuId, patientId),
+    ]);
+
+    // Normalisation des résultats agrégés vers la forme d'un examen complémentaire.
+    const agregesNormalises = agreges.map((it: any) => ({
+      id: it?.id,
+      examinationType: String(it?.type ?? '').toUpperCase() || undefined,
+      titre: it?.examen ?? 'Résultat paraclinique',
+      dateExamen: it?.dateResultat ?? it?.dateDemande ?? null,
+      resultats: it?.resultatTexte ?? '',
+      conclusion: it?.commentaire ?? '',
+      interpretation: '',
+      prescripteur: it?.prescripteur ?? '',
+      laboratoire: it?.serviceSource ?? '',
+      isUrgent: false,
+      statut: it?.statut,
+    }));
+
+    // Rattrapage des comptes-rendus anapath manquants dans le dossier-patient.
+    const aRattraper = await this.anapathRepository.find({
+      where: { patientId, statut: In([Statut.VALIDE, Statut.ARCHIVE]) },
+    });
+    for (const examen of aRattraper) {
+      if (examen.dossierPatientId) continue;
+      const envoye = await this.envoyerCompteRenduDossierPatient(examen);
+      if (envoye?.id && !complementaires.some((it) => String(it.id) === String(envoye.id))) {
+        complementaires.push(envoye);
+      }
+    }
+
+    // Fusion dédupliquée (par id), triée par date décroissante.
+    const vus = new Set<string>();
+    const items = [...agregesNormalises, ...complementaires].filter((it) => {
+      const key = String(it?.id ?? '');
+      if (!key || vus.has(key)) return false;
+      vus.add(key);
+      return true;
+    });
+    items.sort(
+      (a, b) =>
+        new Date(b.dateExamen ?? 0).getTime() - new Date(a.dateExamen ?? 0).getTime(),
+    );
+    return { items, total: items.length };
+  }
+
+  /** Payload du compte-rendu envoyé au service dossier-patient pour un examen validé. */
+  private buildDossierPatientPayload(examen: AnapathRequest): {
+    chuId: string; serviceId: string; patientId: string; examinationType: string;
+    titre: string; description: string; dateExamen: string; resultats: string;
+    interpretation: string; conclusion: string; prescripteur: string;
+    laboratoire: string; urgency: string; isUrgent: boolean; notes: string; createdBy: string;
+  } {
+    const meta = (examen.metadata ?? {}) as Record<string, unknown>;
+    const chuId = (meta.chuId as string) ?? '';
+    const serviceId = (meta.serviceIdSource as string) ?? (meta.serviceIdDest as string) ?? '';
+    const prescripteur = (meta.prescripteurNom as string) ?? (meta.nomMedecinPrescripteur as string) ?? '';
+    // createdBy doit être un UUID : id du prescripteur de la prescription, sinon l'id du service anapath.
+    const createdBy =
+      (meta.prescripteurId as string) ?? ANAPATH_SERVICE_ID;
+    const typeLabel = TYPE_EXAMEN_LABELS[examen.typeExamen] ?? examen.typeExamen;
+    return {
+      chuId,
+      serviceId: serviceId || ANAPATH_SERVICE_ID,
+      patientId: examen.patientId,
+      // Le dossier-patient n'accepte que BIOLOGIE/RADIOLOGIE/ECHOGRAPHIE/IRM/
+      // SCANNER/ECG/EEG/AUTRE : l'anapath est classé AUTRE, le vrai type reste
+      // dans le titre et la description.
+      examinationType: 'AUTRE',
+      titre: `Compte-rendu anapath – ${typeLabel}`,
+      description: `Examen anapath (${typeLabel}) pour le patient`,
+      dateExamen: (examen.validatedAt ?? new Date()).toISOString(),
+      resultats: examen.resultatDetails ?? '',
+      interpretation: '',
+      conclusion: examen.resultatConclusion ?? '',
+      prescripteur,
+      laboratoire: 'Anapath',
+      urgency: 'normale',
+      isUrgent: false,
+      notes: '',
+      createdBy,
+    };
+  }
+
+  /**
+   * Envoie le compte-rendu d'un examen validé au service dossier-patient et
+   * mémorise l'id renvoyé (dossierPatientId). Jamais bloquant ; retourne
+   * l'entité créée ou null en cas d'échec.
+   */
+  private async envoyerCompteRenduDossierPatient(examen: AnapathRequest): Promise<any | null> {
+    try {
+      const payload = this.buildDossierPatientPayload(examen);
+      if (!payload.patientId || !payload.chuId) return null;
+      const created = await this.dossierPatientClient.createComplementaryExamination(payload);
+      if (created && created.id) {
+        examen.dossierPatientId = String(created.id);
+        await this.anapathRepository.update(examen.id, {
+          dossierPatientId: examen.dossierPatientId,
+        });
+      }
+      return created;
+    } catch (e) {
+      console.warn(`Échec envoi dossier patient pour ${examen.anapathId}: ${e instanceof Error ? e.message : e}`);
+      return null;
+    }
+  }
 
   /**
    * Propage un changement de statut local vers le service Prescription externe.
@@ -119,6 +305,7 @@ export class AnapathService {
       resultat: { details, conclusion },
       validatedBySignature: entity.validatedBySignature ?? null,
       validatedByUserId: entity.validatedByUserId ?? null,
+      validatedByName: entity.validatedByName ?? null,
       validationHash: entity.validationHash ?? entity.signedHash ?? null,
       validatedAt: entity.validatedAt ?? null,
     } as AnapathRequestResponse;
@@ -225,6 +412,15 @@ export class AnapathService {
     }
     if (updateDto.statut === Statut.VALIDE) {
       request.validatedAt = new Date();
+      // Résolution du nom du validateur (le pathologiste) auprès de
+      // user-services. Le front passe par PATCH :id (update) pour la
+      // validation finale, pas par POST :id/validate : sans cette résolution
+      // validatedByName restait null et la colonne « Validé par » retombait
+      // sur le numéro d'ordre (validatedByUserId).
+      const validateurNom = await this.userServiceClient.getUserName(token ?? '');
+      if (validateurNom) {
+        request.validatedByName = validateurNom;
+      }
     }
 
     this.syncResultatFields(request);
@@ -372,17 +568,10 @@ export class AnapathService {
       this.accueilClient.buildNomComplet(info) ||
       (typeof info.nom === 'string' ? info.nom : '') ||
       request.patientId;
-    const typeExamen =
-      TYPE_EXAMEN_LABELS[request.typeExamen] ?? request.typeExamen;
-    const serviceDemandeur =
-      (request.metadata?.serviceNom as string) ||
-      (request.metadata?.serviceIdDest as string) ||
-      (request.metadata?.serviceIdSource as string) ||
-      'Service inconnu';
     await this.notificationService.createNotification({
       type: NotificationType.EXAMEN_TECHNIQUE_TERMINE,
       title: `Prêt pour passer l'examen — ${nomPatient}`,
-      message: `Patient prêt pour l'examen — ${nomPatient} · ${typeExamen} · Service demandeur : ${serviceDemandeur}`,
+      message: 'Patient prêt pour l\'examen',
       priority: 'medium',
       source: 'Anapath',
       metadata: {
@@ -477,6 +666,10 @@ export class AnapathService {
       throw new BadRequestException('Résultat non disponible');
 
     const numeroOrdre = dto.numeroOrdre ?? dto.ordreProfessionnelNumber;
+    const [validateurNom] = await Promise.all([
+      this.userServiceClient.getUserName(token ?? ''),
+      Promise.resolve(null),
+    ]);
     const hash =
       dto.hash ??
       crypto
@@ -494,6 +687,7 @@ export class AnapathService {
     request.statut = Statut.VALIDE;
     request.validatedBySignature = dto.signature;
     request.validatedByUserId = numeroOrdre;
+    request.validatedByName = validateurNom ?? null;
     request.validatedAt = new Date();
     request.validationHash = hash;
     request.signedHash = hash;
@@ -502,6 +696,10 @@ export class AnapathService {
 
     const saved = await this.anapathRepository.save(request);
     await this.propagerStatutVersPrescription(saved, token);
+
+    // Envoi automatique du compte-rendu au service dossier patient
+    await this.envoyerCompteRenduDossierPatient(saved);
+
     return this.toResponse(saved);
   }
 
@@ -519,6 +717,13 @@ export class AnapathService {
       patientId: prescription.patientId,
       typeExamen: demande.typeExamen,
       data: demande.data ?? {},
+      // Champs de niveau prescription — préservés tels quels (le GET externe les renvoie).
+      renseignements: prescription.renseignements ?? null,
+      nomMedecinPrescripteur: prescription.nomMedecinPrescripteur ?? null,
+      numeroONM: prescription.numeroONM ?? null,
+      prescriptionStatut: prescription.statut ?? null,
+      // Renseignements cliniques éventuellement portés directement par la demande.
+      demandeRenseignementsCliniques: demande.renseignementsCliniques ?? null,
       chuId: prescription.chuId,
       serviceIdSource: prescription.serviceIdSource,
       serviceIdDest: prescription.serviceIdDest,
@@ -623,25 +828,75 @@ export class AnapathService {
     return candidates;
   }
 
+  /**
+   * Détails À JOUR d'une demande de prescription externe, pour l'affichage du
+   * détail depuis la cloche : GET /prescriptions/anapath/{id} du service
+   * Prescription, la demande demandée est extraite avec sa prescription.
+   */
+  async getPrescriptionDemandeDetails(
+    token: string | undefined,
+    prescriptionId: string,
+    demandeId: string,
+  ): Promise<{ prescription: AnapathPrescription; demande: PrescriptionDemande | null }> {
+    let prescription: AnapathPrescription | null = null;
+    for (const t of await this.resolveTokens(token)) {
+      prescription = await this.prescriptionClient.getPrescriptionById(t, prescriptionId);
+      if (prescription) break;
+    }
+    if (!prescription) {
+      throw new NotFoundException(
+        `Prescription externe ${prescriptionId} introuvable ou indisponible`,
+      );
+    }
+    const demande =
+      (prescription.demandes ?? []).find(
+        (d) => String(d.id) === String(demandeId),
+      ) ?? null;
+    return { prescription, demande };
+  }
+
   /** Construit les champs AnapathRequest depuis les métadonnées d'une notification "nouvelle prescription" (acceptation). */
   private buildRequestFromPendingMetadata(metadata: Record<string, any>): Partial<AnapathRequest> {
     const data = (metadata.data ?? {}) as Record<string, unknown>;
     const details = (data.details ?? {}) as Record<string, unknown>;
+    // Lecture d'une valeur dans data.details (clés préfixées du service Prescription) puis
+    // data (champs plats) — sans transformation, repli booléen/nombre conservés.
     const pick = (...keys: string[]): string => {
       for (const key of keys) {
         const value = details[key] ?? data[key];
         if (typeof value === 'string' && value.trim()) return value.trim();
+        if (typeof value === 'boolean') return value ? 'Oui' : 'Non';
         if (typeof value === 'number') return String(value);
       }
       return '';
     };
 
-    const site = pick('organe', 'localisation', 'siege');
+    const typeExamen = String(metadata.typeExamen ?? '');
+    // Clés du site anatomique par type d'examen, alignées sur le payload réel du service
+    // Prescription (clés préfixées dans data.details, puis champs plats du DTO).
+    const SITE_KEYS: Record<string, string[]> = {
+      FCV_PAP: [],
+      CYT0PONCTION: ['cytoSiege', 'siege', 'cytoOrgane', 'organe'],
+      LIQUIDE: ['liqNat'],
+      BIOPSIE: ['bioOrgane', 'organe', 'bioLocalisation', 'localisation'],
+      POS: ['bioOrgane', 'organe', 'bioLocalisation', 'localisation'],
+      POC: ['bioOrgane', 'organe', 'bioLocalisation', 'localisation'],
+      EXTEMPORANE_STAT: ['extOrgane', 'organe'],
+    };
+    let site = pick(...(SITE_KEYS[typeExamen] ?? ['organe', 'localisation', 'siege']));
+    // Liquide « Autre » : la nature réelle est dans le champ de précision.
+    if (typeExamen === 'LIQUIDE' && site.toLowerCase() === 'autre') {
+      site = pick('liqNatAutre') || site;
+    }
+
     const motif =
-      pick('renseignementsCliniques', 'renseign', 'note', 'bioNote') ||
+      pick('renseignementsCliniques') ||
+      String(metadata.renseignements ?? '').trim() ||
+      String(metadata.demandeRenseignementsCliniques ?? '').trim() ||
+      // Anciens payloads sans renseignementsCliniques : composition sans perte des champs reçus.
       [
         pick('bioNature', 'nature'),
-        pick('bioOrgane', 'organe'),
+        pick('bioOrgane', 'organe', 'cytoOrgane'),
         pick('bioSuspicion', 'suspicion'),
         pick('bioAtcd', 'atcd'),
         pick('bioExamAnt', 'examAnt'),
@@ -656,8 +911,8 @@ export class AnapathService {
       patientId: metadata.patientId,
       prescriptionId: metadata.prescriptionId,
       demandeId: metadata.demandeId,
-      typeExamen: metadata.typeExamen as AnapathRequest['typeExamen'],
-      isExtemporane: metadata.typeExamen === 'EXTEMPORANE_STAT',
+      typeExamen: typeExamen as AnapathRequest['typeExamen'],
+      isExtemporane: typeExamen === 'EXTEMPORANE_STAT',
       prelevement: {
         site,
         description: motif,
@@ -677,6 +932,11 @@ export class AnapathService {
         alertes: metadata.alertes,
         chuNom: metadata.chuNom ?? null,
         serviceNom: metadata.serviceNom ?? null,
+        renseignements: metadata.renseignements ?? null,
+        nomMedecinPrescripteur: metadata.nomMedecinPrescripteur ?? null,
+        numeroONM: metadata.numeroONM ?? null,
+        prescriptionStatut: metadata.prescriptionStatut ?? null,
+        // Le payload complet de la demande est conservé tel quel — aucune perte de champ.
         rawData: data,
       },
       statut: Statut.CREEE,
@@ -703,10 +963,11 @@ export class AnapathService {
       const existingNotif = await this.notificationService.findPendingByDemandeId(demande.id);
       if (existingNotif) continue;
 
+      const alertesTexte = (prescription.alertes ?? '').trim();
       await this.notificationService.createNotification({
         type: NotificationType.NOUVELLE_PRESCRIPTION,
         title: `Nouvelle prescription — ${demande.typeExamen}`,
-        message: `Patient ${prescription.patientId} — ${prescription.urgence ?? 'NORMALE'}`,
+        message: alertesTexte ? `Précautions & alertes : ${alertesTexte}` : '',
         priority: prescription.urgence === 'TRES_URGENT' ? 'high' : 'medium',
         source: 'prescription-pull',
         metadata: this.buildPendingMetadata(prescription, demande, chuNom, serviceNom, prescripteurNom),
@@ -803,11 +1064,16 @@ export class AnapathService {
       }
     }
 
+    const nomPatient =
+      (saved.patientInfo
+        ? this.accueilClient.buildNomComplet(saved.patientInfo)
+        : '') || saved.patientId;
     await this.prescriptionClient.updateDemandeStatut(
       token,
       notification.metadata?.prescriptionId,
       notification.metadata?.demandeId,
       'EN_COURS',
+      `Votre demande pour l'examen du patient ${nomPatient} chez anapath est accepté`,
     );
 
     await this.notificationService.markResolved(notificationId, 'ACCEPTEE', {
@@ -844,7 +1110,10 @@ export class AnapathService {
     await this.notificationService.markResolved(notificationId, 'REFUSEE', { motif });
   }
 
-  @Cron(process.env.PRESCRIPTION_SYNC_CRON ?? '*/15 * * * *')
+  // Toutes les minutes : plus le pull est fréquent, plus la cloche sonne vite
+  // après l'envoi d'une demande (le push socket.io lui-même est instantané).
+  // Surchargable via PRESCRIPTION_SYNC_CRON.
+  @Cron(process.env.PRESCRIPTION_SYNC_CRON ?? '* * * * *')
   async synchroniserPrescriptionsExternesCron(): Promise<void> {
     if ((process.env.PRESCRIPTION_SYNC_ENABLED ?? 'true') !== 'true') return;
     const token = await this.authServiceToken.getToken();
@@ -896,7 +1165,7 @@ export class AnapathService {
         type: 'RAPPORT_HEBDOMADAIRE',
         title: 'Rapport hebdomadaire disponible',
         message:
-          "Le rapport hebdomadaire d'activité du service est prêt — cliquez pour télécharger automatiquement le PDF de la semaine en cours.",
+          "Le rapport d'activité hebdomadaire du service est prêt, cliquer pour télécharger automatiquement le fichier Excel de la semaine en cours.",
         priority: 'medium',
         source: 'Anapath',
       });
