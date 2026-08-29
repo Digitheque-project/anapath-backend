@@ -54,7 +54,7 @@ async function bootstrap() {
   await app.listen(port);
 
   new AccueilClient();
-  const cmsUrl = process.env.CHU_CMS_SERVICE_URL ?? 'https://chu-service-cms7.onrender.com';
+  const cmsUrl = process.env.GATEWAY_URL ?? process.env.CHU_CMS_SERVICE_URL ?? 'https://chu-service-cms7.onrender.com';
   console.log(`✅ Service CHU configuré : ${cmsUrl}`);
 
   console.log(`🚀 Backend Anapath démarré sur http://localhost:${port}`);

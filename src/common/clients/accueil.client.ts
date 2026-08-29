@@ -1,10 +1,11 @@
 import { Injectable } from '@nestjs/common';
 
-// Valeur confirmée en prod : le service Accueil (migré sur Render) expose ses
-// routes AVEC le préfixe `/accueil/...` — l'URL de base est donc la racine,
-// SANS suffixe `/accueil/api` (celui-ci pointe vers le Swagger UI, pas l'API).
-// Vérifié : GET https://acceuil-back.onrender.com/accueil/patients?chuId=… → 200 JSON.
+// Passerelle unique du CHU (registre gateway : prefix 'accueil') au lieu
+// d'un appel direct à acceuil-back — les appels ci-dessous ajoutent déjà
+// eux-mêmes le segment /accueil, inchangé. ACCUEIL_BASE_URL reste un repli
+// direct si la passerelle n'est pas configurée.
 const ACCUEIL_BASE_URL =
+  process.env.GATEWAY_URL ??
   process.env.ACCUEIL_BASE_URL ??
   'https://acceuil-back.onrender.com';
 
