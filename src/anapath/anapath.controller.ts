@@ -101,7 +101,7 @@ export class AnapathController {
   @Permissions('anapath:read')
   @Get('prescriptions/sync-status')
   @ApiOperation({
-    summary: "Statut du token utilisé par le cron/WebSocket Prescription (expiration, etc.) — PRESCRIPTION_CRON_JWT n'est pas un token de service durable",
+    summary: 'Statut du jeton de service auto-signé utilisé par le cron/WebSocket Prescription (JWT_SECRET configuré ou non)',
   })
   @Header('Content-Type', 'application/json; charset=utf-8')
   getPrescriptionSyncStatus() {

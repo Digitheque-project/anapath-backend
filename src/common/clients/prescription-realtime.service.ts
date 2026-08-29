@@ -9,28 +9,17 @@ import { io, Socket } from 'socket.io-client';
 import { AnapathService } from '../../anapath/anapath.service';
 import { AuthServiceTokenService } from './auth-service-token.service';
 
-function decodeJwtExp(token: string): number | null {
-  try {
-    const payloadB64 = token.split('.')[1];
-    const json = Buffer.from(payloadB64, 'base64url').toString('utf8');
-    const payload = JSON.parse(json);
-    return typeof payload.exp === 'number' ? payload.exp : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Client WebSocket (Socket.IO) vers le service Prescription — §4 du prompt
  * d'intégration. Le WebSocket sert de SIGNAL : à chaque événement pertinent, on
  * re-pull en REST (source de vérité) via AnapathService.synchroniserPrescriptions,
  * puis on acquitte la notification.
  *
- * Le token provient d'AuthServiceTokenService : renouvelé automatiquement via un
- * compte de service dédié si configuré (AUTH_SERVICE_URL + PRESCRIPTION_SERVICE_ACCOUNT_*),
- * sinon replié sur PRESCRIPTION_CRON_JWT statique. `auth` est fourni en fonction (pas en
- * objet figé) pour que chaque tentative de reconnexion Socket.IO récupère un token frais
- * plutôt que de rejouer indéfiniment celui capturé au premier appel.
+ * Le token provient d'AuthServiceTokenService, qui signe un jeton de service à
+ * la volée avec JWT_SECRET (voir ce fichier) — jamais mis en cache, donc jamais
+ * expiré en pratique. `auth` est fourni en fonction (pas en objet figé) pour
+ * que chaque tentative de reconnexion Socket.IO récupère un jeton frais plutôt
+ * que de rejouer indéfiniment celui capturé au premier appel.
  */
 @Injectable()
 export class PrescriptionRealtimeService
@@ -71,18 +60,9 @@ export class PrescriptionRealtimeService
     const token = await this.authServiceToken.getToken();
     if (!token) {
       this.logger.warn(
-        'Temps réel non démarré : aucun token disponible (ni compte de service, ni PRESCRIPTION_CRON_JWT) — le cron 15 min prend le relais',
+        'Temps réel non démarré : aucun jeton de service disponible (JWT_SECRET manquant) — le cron 15 min prend le relais',
       );
       return;
-    }
-    // Détection précoce d'un token statique EXPIRÉ : le WebSocket Prescription
-    // n'authentifie pas la connexion, mais le re-pull REST qui suit chaque événement
-    // partira avec ce token et sera rejeté en 401 (cause n°1 de « rien n'apparaît »).
-    const exp = decodeJwtExp(token);
-    if (exp !== null && exp * 1000 < Date.now()) {
-      this.logger.error(
-        `PRESCRIPTION_CRON_JWT EXPIRÉ depuis ${((Date.now() - exp * 1000) / 3600000).toFixed(1)}h — le socket va se connecter mais chaque re-pull REST renverra 401 (aucune notification). Renouveler PRESCRIPTION_CRON_JWT ou configurer un compte de service (PRESCRIPTION_SERVICE_ACCOUNT_EMAIL/PASSWORD).`,
-      );
     }
     this.connect();
   }
