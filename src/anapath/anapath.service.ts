@@ -1163,6 +1163,54 @@ export class AnapathService {
       console.warn('Notification rapport hebdomadaire échouée:', e);
     }
   }
+
+  /**
+   * Envoi manuel du rapport hebdomadaire (modèle CHU) par la secrétaire au
+   * major : crée une notification destinée UNIQUEMENT au major
+   * (recipientRole: 'major'), avec le nom de la secrétaire qui a effectué
+   * l'envoi dans le message.
+   */
+  async envoyerRapportHebdomadaireAuMajor(params: {
+    du?: string;
+    au?: string;
+    secretaire?: { name?: string; firstname?: string } | null;
+  }): Promise<{ success: boolean; id?: string }> {
+    const { du, au, secretaire } = params;
+    const nom = [secretaire?.firstname, secretaire?.name]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+
+    const intervalle =
+      du && au
+        ? ` (du ${du} au ${au})`
+        : du
+          ? ` (à partir du ${du})`
+          : au
+            ? ` (jusqu'au ${au})`
+            : '';
+
+    const created = await this.notificationService.createNotification({
+      type: 'RAPPORT_HEBDOMADAIRE',
+      title: 'Rapport hebdomadaire reçu',
+      message: nom
+        ? `Rapport hebdomadaire du service prêt à être téléchargé${intervalle} — Envoyé par : ${nom}`
+        : `Rapport hebdomadaire du service prêt à être téléchargé${intervalle}`,
+      priority: 'medium',
+      source: 'Anapath',
+      metadata: {
+        recipientRole: 'major',
+        rapportsDu: du ?? null,
+        rapportsAu: au ?? null,
+        envoyePar: nom || null,
+      },
+    });
+
+    if (!created?.id) {
+      return { success: false };
+    }
+    return { success: true, id: created.id };
+  }
 }
 
 function formatTimeSince(date: Date): string {

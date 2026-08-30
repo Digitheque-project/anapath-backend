@@ -75,6 +75,19 @@ export class NotificationsGateway
 
   /** Émet `notification:new` vers le groupe de destinataires (ou tous si aucun). */
   async emitNotificationCreated(notification: unknown): Promise<void> {
+    const metadata = (notification as any)?.metadata ?? {};
+    // Ciblage exclusif major : le groupe « autre » est partagé avec le secrétaire,
+    // on émet donc uniquement vers les sockets « major » pour que la secrétaire ne
+    // reçoive pas en temps réel le rapport qu'elle vient d'envoyer.
+    if (metadata.recipientRole === 'major') {
+      const sockets = await this.server?.in('anapath').fetchSockets();
+      if (!sockets) return;
+      for (const socket of sockets) {
+        if (!socket.data?.isMajor) continue;
+        socket.emit('notification:new', notification);
+      }
+      return;
+    }
     const group = notificationRecipientGroup(notification);
     if (group) {
       this.server?.to(`anapath:${group}`).emit('notification:new', notification);

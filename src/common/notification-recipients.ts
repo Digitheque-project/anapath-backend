@@ -57,6 +57,7 @@ export function notificationRecipientGroup(
   const metadata = notification?.metadata ?? {};
   if (metadata.recipientRole === 'technicien') return 'technicien';
   if (metadata.recipientRole === 'pathologiste') return 'pathologiste';
+  if (metadata.recipientRole === 'major') return 'autre';
   const type = notification?.type ?? metadata.type;
   if (
     type === NotificationType.NOUVELLE_PRESCRIPTION ||
@@ -82,6 +83,13 @@ export function shouldNotifyUser(
     return (
       type === NotificationType.RAPPORT_HEBDOMADAIRE || type === 'RAPPORT'
     );
+  }
+  // Ciblage EXCLUSIF vers le major : seuls les utilisateurs « major » voient la
+  // notification (le groupe « autre » est partagé avec le secrétaire, il faut
+  // donc filtrer explicitement pour que la secrétaire ne reçoive pas le rapport
+  // qu'elle vient elle-même d'envoyer).
+  if ((notification?.metadata?.recipientRole ?? '') === 'major') {
+    return isMajorRole(user?.roleName);
   }
   const group = notificationRecipientGroup(notification);
   if (!group) return true;

@@ -50,6 +50,17 @@ function isTechnicienUser(user?: AuthenticatedUser): boolean {
   );
 }
 
+/** Vrai pour une secrétaire : nom du rôle (« Secrétaire… ») ou rédige les observations (anapath:observation:write) sans pouvoir valider (anapath:validate). */
+function isSecretaireUser(user?: AuthenticatedUser): boolean {
+  if (!user) return false;
+  if (user.roleName && /secretair/i.test(user.roleName)) return true;
+  const perms = user.permissions ?? [];
+  return (
+    perms.includes('anapath:observation:write') &&
+    !perms.includes('anapath:validate')
+  );
+}
+
 @ApiTags('anapath')
 @Controller('anapath')
 export class AnapathController {
@@ -676,6 +687,34 @@ export class AnapathController {
     if (markedLocally) return { success: true };
     const success = await this.notificationClient.markAsRead(id, user.userId);
     return { success };
+  }
+
+  @Permissions('anapath:read')
+  @Post('rapports/hebdomadaire/envoyer')
+  @ApiOperation({ summary: 'Envoyer le rapport hebdomadaire (modèle CHU) au major — notification destinée uniquement au major, avec le nom de la secrétaire qui effectue l\'envoi' })
+  @ApiBody({ schema: { type: 'object', properties: { du: { type: 'string' }, au: { type: 'string' } } } })
+  @Header('Content-Type', 'application/json; charset=utf-8')
+  async envoyerRapportHebdomadaire(
+    @Body() body: { du?: string; au?: string },
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    // Seule la secrétaire envoie le rapport au major. Les autres rôles
+    // (major, technicien, pathologiste…) ne peuvent pas déclencher l'envoi.
+    if (!isSecretaireUser(user)) {
+      throw new ForbiddenException('Réservé à la secrétaire du service');
+    }
+    const result = await this.anapathService.envoyerRapportHebdomadaireAuMajor({
+      du: body?.du,
+      au: body?.au,
+      secretaire: {
+        name: user.name,
+        firstname: user.firstname,
+      },
+    });
+    if (!result.success) {
+      throw new BadRequestException("Impossible de créer la notification du rapport");
+    }
+    return { success: true, id: result.id };
   }
 
   @Permissions('anapath:update')
