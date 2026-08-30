@@ -132,9 +132,8 @@ export class AnapathService {
    * le CHU, en fusionnant les DEUX sources du service dossier-patient :
    *  1. les résultats paracliniques agrégés (ECG, imagerie, kiné…)
    *  2. les examens complémentaires (dont les comptes-rendus anapath)
-   * Rattrapage intégré : les examens anapath déjà validés dont le compte-rendu
-   * n'a pas pu être envoyé sont poussés maintenant — une seule fois via
-   * dossierPatientId.
+   * Lecture seule : les comptes-rendus anapath sont récupérés par le service
+   * dossier-patient via GET /anapath/internal/resultats/patient/:patientId.
    */
   async getDossierPatient(patientId: string, chuId?: string): Promise<{ items: any[]; total: number }> {
     if (!patientId) throw new BadRequestException('patientId requis');
@@ -160,18 +159,6 @@ export class AnapathService {
       statut: it?.statut,
     }));
 
-    // Rattrapage des comptes-rendus anapath manquants dans le dossier-patient.
-    const aRattraper = await this.anapathRepository.find({
-      where: { patientId, statut: In([Statut.VALIDE, Statut.ARCHIVE]) },
-    });
-    for (const examen of aRattraper) {
-      if (examen.dossierPatientId) continue;
-      const envoye = await this.envoyerCompteRenduDossierPatient(examen);
-      if (envoye?.id && !complementaires.some((it) => String(it.id) === String(envoye.id))) {
-        complementaires.push(envoye);
-      }
-    }
-
     // Fusion dédupliquée (par id), triée par date décroissante.
     const vus = new Set<string>();
     const items = [...agregesNormalises, ...complementaires].filter((it) => {
@@ -185,67 +172,6 @@ export class AnapathService {
         new Date(b.dateExamen ?? 0).getTime() - new Date(a.dateExamen ?? 0).getTime(),
     );
     return { items, total: items.length };
-  }
-
-  /** Payload du compte-rendu envoyé au service dossier-patient pour un examen validé. */
-  private buildDossierPatientPayload(examen: AnapathRequest): {
-    chuId: string; serviceId: string; patientId: string; examinationType: string;
-    titre: string; description: string; dateExamen: string; resultats: string;
-    interpretation: string; conclusion: string; prescripteur: string;
-    laboratoire: string; urgency: string; isUrgent: boolean; notes: string; createdBy: string;
-  } {
-    const meta = (examen.metadata ?? {}) as Record<string, unknown>;
-    const chuId = (meta.chuId as string) ?? '';
-    const serviceId = (meta.serviceIdSource as string) ?? (meta.serviceIdDest as string) ?? '';
-    const prescripteur = (meta.prescripteurNom as string) ?? (meta.nomMedecinPrescripteur as string) ?? '';
-    // createdBy doit être un UUID : id du prescripteur de la prescription, sinon l'id du service anapath.
-    const createdBy =
-      (meta.prescripteurId as string) ?? ANAPATH_SERVICE_ID;
-    const typeLabel = TYPE_EXAMEN_LABELS[examen.typeExamen] ?? examen.typeExamen;
-    return {
-      chuId,
-      serviceId: serviceId || ANAPATH_SERVICE_ID,
-      patientId: examen.patientId,
-      // Le dossier-patient n'accepte que BIOLOGIE/RADIOLOGIE/ECHOGRAPHIE/IRM/
-      // SCANNER/ECG/EEG/AUTRE : l'anapath est classé AUTRE, le vrai type reste
-      // dans le titre et la description.
-      examinationType: 'AUTRE',
-      titre: `Compte-rendu anapath – ${typeLabel}`,
-      description: `Examen anapath (${typeLabel}) pour le patient`,
-      dateExamen: (examen.validatedAt ?? new Date()).toISOString(),
-      resultats: examen.resultatDetails ?? '',
-      interpretation: '',
-      conclusion: examen.resultatConclusion ?? '',
-      prescripteur,
-      laboratoire: 'Anapath',
-      urgency: 'normale',
-      isUrgent: false,
-      notes: '',
-      createdBy,
-    };
-  }
-
-  /**
-   * Envoie le compte-rendu d'un examen validé au service dossier-patient et
-   * mémorise l'id renvoyé (dossierPatientId). Jamais bloquant ; retourne
-   * l'entité créée ou null en cas d'échec.
-   */
-  private async envoyerCompteRenduDossierPatient(examen: AnapathRequest): Promise<any | null> {
-    try {
-      const payload = this.buildDossierPatientPayload(examen);
-      if (!payload.patientId || !payload.chuId) return null;
-      const created = await this.dossierPatientClient.createComplementaryExamination(payload);
-      if (created && created.id) {
-        examen.dossierPatientId = String(created.id);
-        await this.anapathRepository.update(examen.id, {
-          dossierPatientId: examen.dossierPatientId,
-        });
-      }
-      return created;
-    } catch (e) {
-      console.warn(`Échec envoi dossier patient pour ${examen.anapathId}: ${e instanceof Error ? e.message : e}`);
-      return null;
-    }
   }
 
   /**
@@ -316,6 +242,62 @@ export class AnapathService {
       details: entity.resultatDetails ?? null,
       conclusion: entity.resultatConclusion ?? null,
     };
+  }
+
+  /**
+   * Notifie le pathologiste que le compte-rendu a été saisi (par la secrétaire)
+   * et est prêt à valider. Appelée dès que le statut passe en EN_ATTENTE_VALIDATION
+   * (auto-save OU bouton « Enregistrer »). Garde-fou anti-doublon : s'il existe
+   * déjà une notification non lue de ce type pour ce même examen (même
+   * « saisiPar »), on ne re-notifie pas — évite un spam à chaque auto-save.
+   * La cloche affiche déjà le nom du patient, le type d'examen et le service
+   * demandeur (enrichis côté controller) ; le message porte donc uniquement le
+   * texte demandé + la ligne « Saisi par » pour éviter toute redondance.
+   */
+  private async notifierSaisieCompteRendu(
+    request: AnapathRequest,
+    token?: string,
+  ): Promise<void> {
+    try {
+      const saisiPar = await this.userServiceClient.getUserName(token ?? '');
+      const info = (request.patientInfo ?? {}) as Record<string, any>;
+      const nomPatient =
+        this.accueilClient.buildNomComplet(info) ||
+        (typeof info.nom === 'string' ? info.nom : '') ||
+        request.patientId;
+
+      const existante = await this.notificationService.findActiveByAnapathId(
+        request.anapathId,
+        NotificationType.EN_ATTENTE_VALIDATION,
+        { saisiPar: saisiPar ?? '' },
+      );
+      if (existante) return;
+
+      await this.notificationService.createNotification({
+        type: NotificationType.EN_ATTENTE_VALIDATION,
+        title: 'Compte-rendu saisi et prêt à valider',
+        message: saisiPar
+          ? `Compte-rendu saisi et prêt à valider — Saisi par : ${saisiPar}`
+          : 'Compte-rendu saisi et prêt à valider',
+        priority: 'medium',
+        source: 'Anapath',
+        metadata: {
+          anapathRequestId: request.id,
+          anapathId: request.anapathId,
+          patientName: nomPatient,
+          typeExamen: request.typeExamen,
+          serviceNom: (request.metadata?.serviceNom as string) ?? null,
+          saisiPar: saisiPar ?? null,
+          // Destinée au pathologiste (masquée pour la secrétaire qui a saisi).
+          recipientRole: 'pathologiste',
+        },
+      });
+    } catch (e) {
+      console.warn(
+        `Notification « compte-rendu saisi » ignorée pour ${request.anapathId}:`,
+        e,
+      );
+    }
   }
 
   async create(createDto: CreateAnapathDto): Promise<AnapathRequestResponse> {
@@ -429,6 +411,13 @@ export class AnapathService {
     if (updateDto.statut !== undefined && updateDto.statut !== statutAvant) {
       await this.propagerStatutVersPrescription(saved, token);
     }
+    if (
+      saved.statut === Statut.EN_ATTENTE_VALIDATION &&
+      statutAvant !== Statut.EN_ATTENTE_VALIDATION &&
+      updateDto.statut === Statut.EN_ATTENTE_VALIDATION
+    ) {
+      await this.notifierSaisieCompteRendu(saved, token);
+    }
     return this.toResponse(saved);
   }
 
@@ -454,7 +443,7 @@ export class AnapathService {
     const hasContent =
       (request.resultatDetails ?? '').trim() !== '' || (request.resultatConclusion ?? '').trim() !== '';
     if (hasContent && request.statut !== Statut.VALIDE && request.statut !== Statut.ARCHIVE) {
-      request.statut = Statut.RESULTAT_DISPONIBLE;
+      request.statut = Statut.EN_ATTENTE_VALIDATION;
     }
 
     this.syncResultatFields(request);
@@ -462,6 +451,9 @@ export class AnapathService {
     const saved = await this.anapathRepository.save(request);
     if (saved.statut !== statutAvant) {
       await this.propagerStatutVersPrescription(saved, token);
+    }
+    if (saved.statut === Statut.EN_ATTENTE_VALIDATION && statutAvant !== Statut.EN_ATTENTE_VALIDATION) {
+      await this.notifierSaisieCompteRendu(saved, token);
     }
     return this.toResponse(saved);
   }
@@ -662,7 +654,7 @@ export class AnapathService {
     const request = await this.findOneEntity(id);
     if (request.statut === Statut.VALIDE)
       throw new BadRequestException('Déjà validée');
-    if (request.statut !== Statut.RESULTAT_DISPONIBLE)
+    if (request.statut !== Statut.EN_ATTENTE_VALIDATION)
       throw new BadRequestException('Résultat non disponible');
 
     const numeroOrdre = dto.numeroOrdre ?? dto.ordreProfessionnelNumber;
@@ -696,9 +688,6 @@ export class AnapathService {
 
     const saved = await this.anapathRepository.save(request);
     await this.propagerStatutVersPrescription(saved, token);
-
-    // Envoi automatique du compte-rendu au service dossier patient
-    await this.envoyerCompteRenduDossierPatient(saved);
 
     return this.toResponse(saved);
   }
@@ -817,7 +806,7 @@ export class AnapathService {
     return nom;
   }
 
-  /** Liste dédupliquée des tokens candidats : utilisateur puis compte de service. */
+  /** Liste dédupliquée des tokens candidats : utilisateur puis jeton de service auto-signé. */
   private async resolveTokens(token?: string): Promise<string[]> {
     const candidates: string[] = [];
     if (token) candidates.push(token);
@@ -1119,7 +1108,7 @@ export class AnapathService {
     const token = await this.authServiceToken.getToken();
     if (!token) {
       console.warn(
-        'Pull des prescriptions ignoré : aucun token de service disponible (compte de service absent ou /auth/login en échec — vérifier AUTH_SERVICE_URL + PRESCRIPTION_SERVICE_ACCOUNT_*)',
+        'Pull des prescriptions ignoré : aucun jeton de service disponible (JWT_SECRET manquant — impossible de signer un jeton auto-signé, voir AuthServiceTokenService)',
       );
       return;
     }

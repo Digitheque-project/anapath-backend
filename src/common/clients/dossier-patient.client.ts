@@ -22,44 +22,6 @@ export class DossierPatientClient {
     return h;
   }
 
-  async createComplementaryExamination(data: {
-    chuId: string;
-    serviceId: string;
-    patientId: string;
-    examinationType: string;
-    titre: string;
-    description: string;
-    dateExamen: string;
-    resultats: string;
-    interpretation: string;
-    conclusion: string;
-    prescripteur: string;
-    laboratoire: string;
-    urgency: string;
-    isUrgent: boolean;
-    notes: string;
-    createdBy: string;
-  }): Promise<any | null> {
-    try {
-      const url = `${this.baseUrl}/dossier-patient/complementary-examinations`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: await this.headers(),
-        body: JSON.stringify(data),
-        signal: AbortSignal.timeout(this.timeout),
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        this.logger.warn(`createComplementaryExamination ${res.status}: ${body}`);
-        return null;
-      }
-      return await res.json();
-    } catch (e) {
-      this.logger.warn(`createComplementaryExamination erreur: ${e instanceof Error ? e.message : e}`);
-      return null;
-    }
-  }
-
   /**
    * Historique complet des examens complémentaires d'un patient dans TOUT le
    * CHU (serviceId omis volontairement) : chirurgie, anapath, imagerie…

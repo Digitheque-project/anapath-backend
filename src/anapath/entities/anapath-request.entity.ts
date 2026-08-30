@@ -29,7 +29,9 @@ export enum Statut {
   // Examen technique validé par le technicien/histotechnicien — prêt pour le
   // pathologiste (onglet « Suivre l'examen » du fil de travail pathologiste).
   EN_ATTENTE_PATHOLOGUE = 'EN_ATTENTE_PATHOLOGUE',
-  RESULTAT_DISPONIBLE = 'RESULTAT_DISPONIBLE',
+  // Compte-rendu saisi (secrétaire/pathologiste) mais PAS encore validé —
+  // distinct de VALIDE (validation finale avec signature).
+  EN_ATTENTE_VALIDATION = 'EN_ATTENTE_VALIDATION',
   VALIDE = 'VALIDE',
   ARCHIVE = 'ARCHIVE',
   ANNULEE = 'ANNULEE',
@@ -121,11 +123,6 @@ export class AnapathRequest {
 
   @Column({ type: 'timestamp', nullable: true })
   validatedAt: Date;
-
-  // Id de l'examen complémentaire correspondant dans le service dossier-patient
-  // (renseigné après l'envoi du compte-rendu ; null = pas encore envoyé).
-  @Column({ nullable: true })
-  dossierPatientId: string;
 
   @Column({ nullable: true })
   validationHash: string;

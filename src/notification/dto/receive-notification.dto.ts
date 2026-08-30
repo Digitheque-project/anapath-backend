@@ -3,7 +3,7 @@ import { ApiProperty } from '@nestjs/swagger';
 
 export enum NotificationType {
   STAT_ALERT = 'STAT_ALERT',
-  RESULTAT_DISPONIBLE = 'RESULTAT_DISPONIBLE',
+  EN_ATTENTE_VALIDATION = 'EN_ATTENTE_VALIDATION',
   VALIDATION = 'VALIDATION',
   URGENT = 'URGENT',
   INFO = 'INFO',

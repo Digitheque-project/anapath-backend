@@ -83,7 +83,7 @@ export class AnapathController {
   async findResultsForPatient(@Param('patientId') patientId: string) {
     const rows = await this.anapathService.findAll(patientId);
     const filtered = rows.filter(r =>
-      r.resultat && (r.statut === Statut.RESULTAT_DISPONIBLE || r.statut === Statut.VALIDE)
+      r.resultat && (r.statut === Statut.EN_ATTENTE_VALIDATION || r.statut === Statut.VALIDE)
     );
     return this.enrichExamensPatient(filtered, {}, undefined);
   }
@@ -135,7 +135,7 @@ export class AnapathController {
   // Alias du contrat « Résultats paracliniques » (agrégateur dossier-patient) :
   // même handler, chemins préfixés /anapath au cas où l'agrégateur appelle
   // {baseUrl}/anapath/… — volontairement SANS @Permissions pour accepter le
-  // compte de service de n'importe quel service du CHU.
+  // jeton de service auto-signé de n'importe quel service du CHU.
   @Get(['resultats/patient/:patientId', 'patients/:patientId/resultats'])
   @ApiOperation({ summary: 'Résultats paracliniques anapath d’un patient (alias contrat agrégateur)' })
   @ApiParam({ name: 'patientId', description: 'UUID du patient (service Accueil)' })
@@ -149,7 +149,7 @@ export class AnapathController {
   @Permissions('anapath:read')
   @Get('prescriptions/sync-status')
   @ApiOperation({
-    summary: "Statut du token utilisé par le cron/WebSocket Prescription (expiration, etc.) — PRESCRIPTION_CRON_JWT n'est pas un token de service durable",
+    summary: 'Statut du jeton de service auto-signé utilisé par le cron/WebSocket Prescription (JWT_SECRET configuré ou non)',
   })
   @Header('Content-Type', 'application/json; charset=utf-8')
   getPrescriptionSyncStatus() {
@@ -369,7 +369,7 @@ export class AnapathController {
             createdAt: examen.createdAt,
             lu:
               examen.notificationLue &&
-              ['RESULTAT_DISPONIBLE', 'VALIDE', 'ARCHIVE'].includes(
+              ['EN_ATTENTE_VALIDATION', 'VALIDE', 'ARCHIVE'].includes(
                 examen.statut,
               ),
           },

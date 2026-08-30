@@ -1,115 +1,73 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import axios from 'axios';
+import * as jwt from 'jsonwebtoken';
 
-interface CachedToken {
-  token: string;
-  expiresAtMs: number;
-}
-
-function decodeJwtExpMs(token: string): number | null {
-  try {
-    const payloadB64 = token.split('.')[1];
-    const json = Buffer.from(payloadB64, 'base64url').toString('utf8');
-    const payload = JSON.parse(json);
-    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
-  } catch {
-    return null;
-  }
-}
+const ANAPATH_SERVICE_ID =
+  process.env.ANAPATH_SERVICE_ID ?? '9e73904c-71e5-4477-9280-513e4112a468';
 
 /**
- * Obtient et renouvelle automatiquement un token JWT pour un compte de service dédié,
- * via POST /auth/login sur le service d'authentification central (auth-service). Remplace
- * le besoin de coller manuellement un token de session (PRESCRIPTION_CRON_JWT) qui expire
- * ~24h — utilisé par le cron de pull ET le WebSocket temps réel Prescription.
+ * Jeton de service auto-signé pour les appels sortants sans requête utilisateur
+ * (cron de pull des prescriptions, WebSocket temps réel, repli dans
+ * AnapathService.resolveTokens quand aucun token utilisateur n'est disponible).
  *
- * Si PRESCRIPTION_SERVICE_ACCOUNT_EMAIL/PASSWORD ne sont pas configurés, retombe sur le
- * token statique PRESCRIPTION_CRON_JWT (compatibilité ascendante / migration progressive
- * tant qu'aucun compte de service dédié n'a été créé côté auth).
+ * Remplace l'ancien mécanisme à base de compte de service dédié (POST
+ * /auth/login avec PRESCRIPTION_SERVICE_ACCOUNT_EMAIL/PASSWORD stockés en
+ * variable d'environnement) : dans un déploiement hospitalier réel, ces
+ * identifiants peuvent être changés ou révoqués par l'IT sans préavis, ce qui
+ * casserait silencieusement le pull en production sans qu'aucun code n'ait
+ * changé. Un jeton auto-signé n'a pas ce problème — rien à stocker, rien à
+ * faire tourner, rien qui expire sans qu'on puisse le regénérer à la volée.
+ *
+ * Signé avec le même secret que celui qui signe déjà les JWT utilisateurs SSO
+ * (JWT_SECRET, partagé avec la gateway et les autres services de
+ * l'écosystème) : les services tiers qui font confiance à ce secret (ex.
+ * service Prescription) acceptent ce jeton comme n'importe quel JWT SSO
+ * légitime.
+ *
+ * Jamais mis en cache : régénéré à chaque appel. Durée de vie volontairement
+ * courte (5 min) pour limiter la fenêtre d'exploitation en cas de fuite —
+ * sans coût, puisqu'il n'y a justement plus de renouvellement à orchestrer.
  */
 @Injectable()
 export class AuthServiceTokenService {
   private readonly logger = new Logger('AuthServiceToken');
-  private readonly authServiceUrl: string;
-  private readonly email?: string;
-  private readonly password?: string;
-  private readonly staticFallbackToken?: string;
-  private readonly timeout = 30000;
-  // Renouvelle un peu avant l'expiration réelle pour ne jamais être pris au dépourvu.
-  private readonly refreshMarginMs = 15 * 60 * 1000;
-  private cached: CachedToken | null = null;
-  private loginPromise: Promise<string | undefined> | null = null;
+  private readonly jwtSecret: string;
 
   constructor(configService?: ConfigService) {
-    this.authServiceUrl = (
-      configService?.get<string>('AUTH_SERVICE_URL') ??
-      process.env.AUTH_SERVICE_URL ??
-      'https://gateway-bwm4.onrender.com'
-    ).replace(/\/$/, '');
-    this.email =
-      configService?.get<string>('PRESCRIPTION_SERVICE_ACCOUNT_EMAIL') ??
-      process.env.PRESCRIPTION_SERVICE_ACCOUNT_EMAIL ??
-      // Variante acceptée sur Render : le nom EMAIL n'a pas pu y être enregistré,
-      // le compte est stocké sous PRESCRIPTION_SERVICE_ACCOUNT_MAIL.
-      process.env.PRESCRIPTION_SERVICE_ACCOUNT_MAIL;
-    this.password =
-      configService?.get<string>('PRESCRIPTION_SERVICE_ACCOUNT_PASSWORD') ??
-      process.env.PRESCRIPTION_SERVICE_ACCOUNT_PASSWORD ??
-      // Variante acceptée sur Render : PRESCRIPTION_SERVICE_ACCOUNT_PWD.
-      process.env.PRESCRIPTION_SERVICE_ACCOUNT_PWD;
-    this.staticFallbackToken =
-      configService?.get<string>('PRESCRIPTION_CRON_JWT') ??
-      process.env.PRESCRIPTION_CRON_JWT;
+    this.jwtSecret =
+      configService?.get<string>('JWT_SECRET') ?? process.env.JWT_SECRET ?? '';
   }
 
+  /** Un jeton de service peut être signé dès que JWT_SECRET est configuré. */
   hasServiceAccount(): boolean {
-    return Boolean(this.email && this.password);
+    return Boolean(this.jwtSecret);
   }
 
-  /** Retourne un token valide — se reconnecte automatiquement si besoin, sinon retombe sur le token statique. */
+  /** Ne throw jamais : renvoie undefined si JWT_SECRET est absent, l'appelant reste dégradé proprement. */
   async getToken(): Promise<string | undefined> {
-    if (!this.hasServiceAccount()) {
-      return this.staticFallbackToken;
-    }
-    if (this.cached && this.cached.expiresAtMs - this.refreshMarginMs > Date.now()) {
-      return this.cached.token;
-    }
-    // Anti-rafale : n'appelle /auth/login qu'une fois même si getToken() est invoqué en parallèle.
-    if (!this.loginPromise) {
-      this.loginPromise = this.login().finally(() => {
-        this.loginPromise = null;
-      });
-    }
-    return this.loginPromise;
-  }
-
-  private async login(): Promise<string | undefined> {
-    try {
-      const { data } = await axios.post(
-        `${this.authServiceUrl}/auth/login`,
-        { email: this.email, password: this.password },
-        { timeout: this.timeout },
+    if (!this.jwtSecret) {
+      this.logger.warn(
+        'JWT_SECRET non défini — impossible de signer un jeton de service, le pull de fond des prescriptions et le WebSocket temps réel échoueront.',
       );
-      const token: string | undefined = data?.accessToken ?? data?.token ?? data?.access_token;
-      if (!token) {
-        this.logger.error(
-          `Réponse de /auth/login sans token reconnu (clés reçues: ${Object.keys(data ?? {}).join(', ') || 'aucune'})`,
-        );
-        return this.cached?.token ?? this.staticFallbackToken;
-      }
-      const expiresAtMs = decodeJwtExpMs(token) ?? Date.now() + 60 * 60 * 1000;
-      this.cached = { token, expiresAtMs };
-      this.logger.log(
-        `Nouveau token de service obtenu automatiquement, valide jusqu'à ${new Date(expiresAtMs).toISOString()}`,
-      );
-      return token;
-    } catch (e) {
-      this.logger.error(
-        `Échec du renouvellement automatique du token de service : ${e instanceof Error ? e.message : e}`,
-      );
-      // Dégradé : garder l'ancien token en cache s'il existe encore, sinon le repli statique.
-      return this.cached?.token ?? this.staticFallbackToken;
+      return undefined;
     }
+    return jwt.sign(
+      {
+        userId: 'anapath-service-account',
+        name: 'Anapath',
+        firstname: 'Service',
+        email: 'service@anapath.internal',
+        services: [
+          {
+            serviceId: ANAPATH_SERVICE_ID,
+            serviceName: 'Anatomopathologie',
+            roleName: 'SERVICE',
+            permissions: [],
+          },
+        ],
+      },
+      this.jwtSecret,
+      { expiresIn: '5m' },
+    );
   }
 }
