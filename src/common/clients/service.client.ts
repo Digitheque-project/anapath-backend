@@ -17,7 +17,11 @@ export class ServiceServiceClient {
   private readonly timeout = 5000;
 
   constructor(configService?: ConfigService) {
+    // Passerelle unique du CHU (registre gateway : prefix 'services') au
+    // lieu d'un appel direct au service-service.
     this.baseUrl = (
+      configService?.get<string>('GATEWAY_URL') ??
+      process.env.GATEWAY_URL ??
       configService?.get<string>('SERVICE_SERVICE_URL') ??
       process.env.SERVICE_SERVICE_URL ??
       'https://gateway-bwm4.onrender.com'

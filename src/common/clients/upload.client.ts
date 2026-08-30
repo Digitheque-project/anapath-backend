@@ -15,7 +15,11 @@ export class UploadClient {
   private readonly timeout = 15000;
 
   constructor(configService?: ConfigService) {
+    // Passerelle unique du CHU (registre gateway : prefix 'upload') au lieu
+    // d'un appel direct au service d'upload.
     this.baseUrl = (
+      configService?.get<string>('GATEWAY_URL') ??
+      process.env.GATEWAY_URL ??
       configService?.get<string>('UPLOAD_SERVICE_URL') ??
       process.env.UPLOAD_SERVICE_URL ??
       'https://gateway-bwm4.onrender.com'

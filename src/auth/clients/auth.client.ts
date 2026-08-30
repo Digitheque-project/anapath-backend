@@ -38,7 +38,11 @@ export class AuthClient {
     private readonly jwtService: JwtService,
     configService?: ConfigService,
   ) {
+    // Passerelle unique du CHU (registre gateway : prefix 'users') au lieu
+    // d'un appel direct à user-services.
     this.userServicesUrl = (
+      configService?.get<string>('GATEWAY_URL') ??
+      process.env.GATEWAY_URL ??
       configService?.get<string>('USER_SERVICES_URL') ??
       process.env.USER_SERVICES_URL ??
       'https://gateway-bwm4.onrender.com'

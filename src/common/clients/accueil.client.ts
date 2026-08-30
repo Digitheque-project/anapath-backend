@@ -1,7 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { AuthServiceTokenService } from './auth-service-token.service';
 
+// Passerelle unique du CHU (registre gateway : prefix 'accueil') au lieu
+// d'un appel direct à acceuil-back — les appels ci-dessous ajoutent déjà
+// eux-mêmes le segment /accueil, inchangé. ACCUEIL_BASE_URL reste un repli
+// direct si la passerelle n'est pas configurée.
 const ACCUEIL_BASE_URL =
+  process.env.GATEWAY_URL ??
   process.env.ACCUEIL_BASE_URL ??
   'https://gateway-bwm4.onrender.com';
 

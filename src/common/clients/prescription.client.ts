@@ -41,7 +41,11 @@ export class PrescriptionClient {
   private readonly timeout = 5000;
 
   constructor(configService?: ConfigService) {
+    // Passerelle unique du CHU (registre gateway : prefix 'prescriptions')
+    // au lieu d'un appel direct au service Prescription.
     this.baseUrl = (
+      configService?.get<string>('GATEWAY_URL') ??
+      process.env.GATEWAY_URL ??
       configService?.get<string>('PRESCRIPTION_SERVICE_URL') ??
       process.env.PRESCRIPTION_SERVICE_URL ??
       'https://gateway-bwm4.onrender.com'

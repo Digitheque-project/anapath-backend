@@ -9,10 +9,14 @@ export class ChuClient {
   private readonly timeout = 5000;
 
   constructor(configService?: ConfigService) {
-    // Ce client ne parle qu'au service CHU (Render) : /chu et /prise-en-charge,
-    // sécurisé par le JWT de l'écosystème d'auth (un Bearer est exigé).
-    // L'ancien service CHU Railway est arrêté : aucune dépendance ne doit pointer vers lui.
+    // Passerelle unique du CHU (registre gateway : prefix 'chu', chemins
+    // /chu et /prise-en-charge) au lieu d'un appel direct — l'ancien repli
+    // (chu-service-cms7.onrender.com) est mort (503 persistant, vérifié en
+    // direct le 29/08/2026) : le service réellement utilisé par la gateway
+    // (chu-service-fec1.onrender.com) répond, lui, correctement.
     this.cmsBaseUrl = (
+      configService?.get<string>('GATEWAY_URL') ??
+      process.env.GATEWAY_URL ??
       configService?.get<string>('CHU_CMS_SERVICE_URL') ??
       process.env.CHU_CMS_SERVICE_URL ??
       'https://gateway-bwm4.onrender.com'

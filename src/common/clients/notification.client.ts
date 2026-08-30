@@ -18,7 +18,14 @@ export class NotificationClient {
   private readonly timeout = 5000;
 
   constructor(private configService?: ConfigService) {
+    // Passerelle unique du CHU (registre gateway : prefix 'notification',
+    // chemin réel /notifications) au lieu d'un appel direct — l'ancien repli
+    // (service-notification-nlqp.onrender.com) est mort (503 persistant,
+    // vérifié en direct le 29/08/2026) : les notifications Anapath étaient
+    // donc silencieusement cassées tant qu'aucune variable n'était définie.
     this.baseUrl = (
+      this.configService?.get<string>('GATEWAY_URL') ??
+      process.env.GATEWAY_URL ??
       this.configService?.get<string>('NOTIFICATION_SERVICE_URL') ??
       process.env.NOTIFICATION_SERVICE_URL ??
       'https://gateway-bwm4.onrender.com'
