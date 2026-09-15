@@ -77,6 +77,18 @@ export class AuthClient {
       return null;
     }
 
+    // Le portail peut émettre des permissions préfixées "anatomiepath:" (ex.
+    // "anatomiepath:read") alors que les gardes du backend n'attendent que
+    // "anapath:". Sans normalisation, aucune permission n'est reconnue et
+    // l'utilisateur est bloqué (403 / boucle de redirection). Le mapping est
+    // neutre si le portail émet déjà "anapath:". Il ne touche pas aux données
+    // et ne fait que traduire le nommage des permissions du token.
+    const permissions = (matched.permissions ?? []).map((p: string) =>
+      p.startsWith('anatomiepath:')
+        ? 'anapath:' + p.slice('anatomiepath:'.length)
+        : p,
+    );
+
     let userRecord: any;
     try {
       const { data } = await axios.get(
@@ -108,7 +120,7 @@ export class AuthClient {
       firstname: payload.firstname,
       email: payload.email,
       roleName: matched.roleName,
-      permissions: matched.permissions ?? [],
+      permissions,
     };
 
     this.cache.set(cacheKey, {
