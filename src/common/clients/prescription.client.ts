@@ -48,7 +48,7 @@ export class PrescriptionClient {
       process.env.GATEWAY_URL ??
       configService?.get<string>('PRESCRIPTION_SERVICE_URL') ??
       process.env.PRESCRIPTION_SERVICE_URL ??
-      'https://gateway-bwm4.onrender.com'
+      'https://gateway-5pqs.onrender.com'
     ).replace(/\/$/, '');
   }
 

@@ -8,13 +8,16 @@ import { AuthenticatedUser } from '../auth/types/authenticated-user.interface';
  * ne reçoivent jamais une notification destinée au technicien ou au pathologiste.
  */
 
-export type RecipientGroup = 'technicien' | 'pathologiste' | 'autre';
+export type RecipientGroup = 'technicien' | 'pathologiste' | 'major' | 'autre';
 
 export function isTechnicienRole(
   roleName?: string,
   permissions?: string[],
 ): boolean {
-  if (roleName && /technicien/i.test(roleName)) return true;
+  if (roleName) {
+    if (/technicien/i.test(roleName)) return true;
+    if (/major|chef|patholog|secretair/i.test(roleName)) return false;
+  }
   if (!permissions) return false;
   return (
     permissions.includes('anapath:update') &&
@@ -27,11 +30,18 @@ export function isMajorRole(roleName?: string): boolean {
   return !!roleName && /major/i.test(roleName);
 }
 
+export function isChefRole(roleName?: string): boolean {
+  return !!roleName && /chef/i.test(roleName);
+}
+
 export function isPathologisteRole(
   roleName?: string,
   permissions?: string[],
 ): boolean {
-  if (roleName && /patholog/i.test(roleName)) return true;
+  if (roleName) {
+    if (/patholog/i.test(roleName)) return true;
+    if (/major|chef|technicien|secretair/i.test(roleName)) return false;
+  }
   if (!permissions) return false;
   return (
     permissions.includes('anapath:validate') &&
@@ -39,34 +49,44 @@ export function isPathologisteRole(
   );
 }
 
-/** Groupe de destinataires effectif d'un utilisateur. Le major est « autre ». */
+/** Groupe de destinataires effectif d'un utilisateur. Le major a son propre groupe. */
 export function userRecipientGroup(
   user?: AuthenticatedUser | null,
 ): RecipientGroup {
   if (!user) return 'autre';
-  if (isMajorRole(user.roleName)) return 'autre';
+  if (isMajorRole(user.roleName)) return 'major';
   if (isTechnicienRole(user.roleName, user.permissions)) return 'technicien';
   if (isPathologisteRole(user.roleName, user.permissions)) return 'pathologiste';
   return 'autre';
 }
 
-/** Groupe de destinataires d'une notification (undefined = destinée à tous). */
-export function notificationRecipientGroup(
+/**
+ * Groupes de destinataires d'une notification (undefined = notification
+ * générique destinée à tout le monde, hors major).
+ */
+export function notificationRecipientGroups(
   notification: any,
-): RecipientGroup | undefined {
+): RecipientGroup[] | undefined {
   const metadata = notification?.metadata ?? {};
-  if (metadata.recipientRole === 'technicien') return 'technicien';
-  if (metadata.recipientRole === 'pathologiste') return 'pathologiste';
-  if (metadata.recipientRole === 'major') return 'autre';
+  const rt = metadata.recipientRole;
+  if (rt === 'technicien') return ['technicien'];
+  if (rt === 'pathologiste') return ['pathologiste'];
+  if (rt === 'major') return ['major'];
   const type = notification?.type ?? metadata.type;
   if (
     type === NotificationType.NOUVELLE_PRESCRIPTION ||
     type === NotificationType.PATIENT_PRET_EXAMEN_TECHNIQUE
   ) {
-    return 'technicien';
+    return ['technicien'];
   }
   if (type === NotificationType.EXAMEN_TECHNIQUE_TERMINE) {
-    return 'pathologiste';
+    return ['pathologiste'];
+  }
+  if (type === NotificationType.STAT_ALERT) {
+    return ['technicien', 'pathologiste'];
+  }
+  if (type === NotificationType.RAPPORT_HEBDOMADAIRE || type === 'RAPPORT') {
+    return ['major'];
   }
   return undefined;
 }
@@ -76,22 +96,18 @@ export function shouldNotifyUser(
   notification: any,
   user?: AuthenticatedUser | null,
 ): boolean {
-  // Le major ne reçoit QUE la notification du rapport hebdomadaire : pas les
-  // alertes STAT ni les notifications internes du service.
-  if (isMajorRole(user?.roleName)) {
-    const type = notification?.type ?? notification?.metadata?.type;
-    return (
-      type === NotificationType.RAPPORT_HEBDOMADAIRE || type === 'RAPPORT'
-    );
+  if (!user) return false;
+  const type = notification?.type ?? notification?.metadata?.type;
+  const isReport =
+    type === NotificationType.RAPPORT_HEBDOMADAIRE || type === 'RAPPORT';
+  // Le major et le chef de service (« consultation ») reçoivent les
+  // notifications du rapport hebdomadaire : le major télécharge, le chef
+  // consulte. Ils ne reçoivent JAMAIS les alertes STAT ni les notifications
+  // destinées au technicien/pathologiste.
+  if (isMajorRole(user.roleName) || isChefRole(user.roleName)) {
+    return isReport;
   }
-  // Ciblage EXCLUSIF vers le major : seuls les utilisateurs « major » voient la
-  // notification (le groupe « autre » est partagé avec le secrétaire, il faut
-  // donc filtrer explicitement pour que la secrétaire ne reçoive pas le rapport
-  // qu'elle vient elle-même d'envoyer).
-  if ((notification?.metadata?.recipientRole ?? '') === 'major') {
-    return isMajorRole(user?.roleName);
-  }
-  const group = notificationRecipientGroup(notification);
-  if (!group) return true;
-  return userRecipientGroup(user) === group;
+  const groups = notificationRecipientGroups(notification);
+  if (!groups) return true;
+  return groups.includes(userRecipientGroup(user));
 }

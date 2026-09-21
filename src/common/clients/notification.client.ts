@@ -4,7 +4,7 @@ import axios from 'axios';
 
 /**
  * Client vers le service Notification externe dédié (aucune authentification requise,
- * vérifié empiriquement). URL : NOTIFICATION_SERVICE_URL (défaut https://gateway-bwm4.onrender.com).
+ * vérifié empiriquement). URL : NOTIFICATION_SERVICE_URL (défaut https://gateway-5pqs.onrender.com).
  *
  * Les erreurs du service externe sont LOGGÉES (jamais silencieuses) afin de distinguer
  * « rien à afficher » d'« API externe injoignable » : un catch silencieux ferait croire
@@ -28,7 +28,7 @@ export class NotificationClient {
       process.env.GATEWAY_URL ??
       this.configService?.get<string>('NOTIFICATION_SERVICE_URL') ??
       process.env.NOTIFICATION_SERVICE_URL ??
-      'https://gateway-bwm4.onrender.com'
+      'https://gateway-5pqs.onrender.com'
     ).replace(/\/$/, '');
     this.serviceId =
       this.configService?.get<string>('ANAPATH_SERVICE_ID') ??

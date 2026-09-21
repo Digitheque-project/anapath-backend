@@ -19,7 +19,7 @@ export class ChuClient {
       process.env.GATEWAY_URL ??
       configService?.get<string>('CHU_CMS_SERVICE_URL') ??
       process.env.CHU_CMS_SERVICE_URL ??
-      'https://gateway-bwm4.onrender.com'
+      'https://gateway-5pqs.onrender.com'
     ).replace(/\/$/, '');
     this.anapathServiceId =
       configService?.get<string>('ANAPATH_SERVICE_ID') ??

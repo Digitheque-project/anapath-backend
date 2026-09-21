@@ -24,7 +24,7 @@ export class UserServiceClient {
       process.env.GATEWAY_URL ??
       configService?.get<string>('USER_SERVICES_URL') ??
       process.env.USER_SERVICES_URL ??
-      'https://gateway-bwm4.onrender.com'
+      'https://gateway-5pqs.onrender.com'
     ).replace(/\/$/, '');
     this.timeout = 20000;
   }

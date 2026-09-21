@@ -41,7 +41,13 @@ function sortNotifications(notifs: any[]): any[] {
  */
 function isTechnicienUser(user?: AuthenticatedUser): boolean {
   if (!user) return false;
-  if (user.roleName && /technicien/i.test(user.roleName)) return true;
+  // Le nom du rôle prime sur la déduction par permissions : un major ou un
+  // chef de service possédant anapath:update ne doit jamais être confondu
+  // avec un technicien.
+  if (user.roleName) {
+    if (/technicien/i.test(user.roleName)) return true;
+    if (/major|chef|patholog|secretair/i.test(user.roleName)) return false;
+  }
   const perms = user.permissions ?? [];
   return (
     perms.includes('anapath:update') &&
@@ -53,7 +59,10 @@ function isTechnicienUser(user?: AuthenticatedUser): boolean {
 /** Vrai pour une secrétaire : nom du rôle (« Secrétaire… ») ou rédige les observations (anapath:observation:write) sans pouvoir valider (anapath:validate). */
 function isSecretaireUser(user?: AuthenticatedUser): boolean {
   if (!user) return false;
-  if (user.roleName && /secretair/i.test(user.roleName)) return true;
+  if (user.roleName) {
+    if (/secretair/i.test(user.roleName)) return true;
+    if (/major|chef|technicien|patholog/i.test(user.roleName)) return false;
+  }
   const perms = user.permissions ?? [];
   return (
     perms.includes('anapath:observation:write') &&

@@ -9,7 +9,8 @@ import { AuthClient } from '../auth/clients/auth.client';
 import { getCorsOrigins } from '../common/cors-origins';
 import {
   isMajorRole,
-  notificationRecipientGroup,
+  isChefRole,
+  notificationRecipientGroups,
   userRecipientGroup,
 } from '../common/notification-recipients';
 import { NotificationType } from '../notification/dto/receive-notification.dto';
@@ -66,6 +67,9 @@ export class NotificationsGateway
       const group = userRecipientGroup(user);
       client.data.recipientGroup = group;
       client.data.isMajor = isMajorRole(user.roleName);
+      // Le chef de service consulte les rapports hebdomadaires (sans pouvoir
+      // les télécharger) : il est donc aussi destinataire de la notification.
+      client.data.reportViewer = isMajorRole(user.roleName) || isChefRole(user.roleName);
       client.join('anapath');
       client.join(`anapath:${group}`);
     } catch {
@@ -73,36 +77,47 @@ export class NotificationsGateway
     }
   }
 
-  /** Émet `notification:new` vers le groupe de destinataires (ou tous si aucun). */
+  /** Émet `notification:new` vers les groupes de destinataires (ou tous si aucun). */
   async emitNotificationCreated(notification: unknown): Promise<void> {
-    const metadata = (notification as any)?.metadata ?? {};
-    // Ciblage exclusif major : le groupe « autre » est partagé avec le secrétaire,
-    // on émet donc uniquement vers les sockets « major » pour que la secrétaire ne
-    // reçoive pas en temps réel le rapport qu'elle vient d'envoyer.
-    if (metadata.recipientRole === 'major') {
-      const sockets = await this.server?.in('anapath').fetchSockets();
-      if (!sockets) return;
-      for (const socket of sockets) {
-        if (!socket.data?.isMajor) continue;
-        socket.emit('notification:new', notification);
+    const groups = notificationRecipientGroups(notification);
+    if (groups && groups.length > 0) {
+      // Ciblage par groupes de rôles : une STAT_ALERT va au technicien ET au
+      // pathologiste ; une notification destinée au major (rapport hebdomadaire)
+      // ne part jamais à la secrétaire, pourtant du groupe « autre ».
+      if (groups.includes('major')) {
+        const sockets = await this.server?.in('anapath').fetchSockets();
+        if (!sockets) return;
+        for (const socket of sockets) {
+          if (!socket.data?.reportViewer) continue;
+          socket.emit('notification:new', notification);
+        }
+        return;
+      }
+      if (groups.includes('autre')) {
+        const sockets = await this.server?.in('anapath').fetchSockets();
+        if (!sockets) return;
+        for (const socket of sockets) {
+          if (socket.data?.isMajor) continue;
+          socket.emit('notification:new', notification);
+        }
+        return;
+      }
+      // Groupes « simple » (technicien / pathologiste) : salon dédié.
+      for (const g of groups) {
+        this.server?.to(`anapath:${g}`).emit('notification:new', notification);
       }
       return;
     }
-    const group = notificationRecipientGroup(notification);
-    if (group) {
-      this.server?.to(`anapath:${group}`).emit('notification:new', notification);
-      return;
-    }
-    // Notification générique : tout le monde SAUF le major — qui ne reçoit que
-    // la notification du rapport hebdomadaire (et pas les alertes STAT).
+    // Notification générique (sans groupe ciblé) : tout le monde SAUF le major —
+    // qui ne reçoit que la notification du rapport hebdomadaire.
     const type =
       (notification as any)?.type ?? (notification as any)?.metadata?.type;
-    const includeMajor =
+    const isReport =
       type === NotificationType.RAPPORT_HEBDOMADAIRE || type === 'RAPPORT';
     const sockets = await this.server?.in('anapath').fetchSockets();
     if (!sockets) return;
     for (const socket of sockets) {
-      if (!includeMajor && socket.data?.isMajor) continue;
+      if (!isReport && socket.data?.isMajor) continue;
       socket.emit('notification:new', notification);
     }
   }

@@ -41,7 +41,7 @@ export class PrescriptionRealtimeService
     this.baseUrl = (
       configService?.get<string>('PRESCRIPTION_SERVICE_URL') ??
       process.env.PRESCRIPTION_SERVICE_URL ??
-      'https://gateway-bwm4.onrender.com'
+      'https://gateway-5pqs.onrender.com'
     ).replace(/\/$/, '');
     this.enabled =
       (configService?.get<string>('PRESCRIPTION_WS_ENABLED') ??

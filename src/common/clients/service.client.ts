@@ -5,7 +5,7 @@ import axios from 'axios';
 /**
  * Client vers le service-service (registre des services du CHU) — source
  * officielle du libellé « Service demandeur » (serviceIdSource d'une
- * prescription). Accédé via le gateway central (gateway-bwm4.onrender.com).
+ * prescription). Accédé via le gateway central (gateway-5pqs.onrender.com).
  * Routes réelles à la racine : GET /services (liste, optionnel ?chuId=)
  * et GET /services/{id} (résolution directe par UUID). Exige un Bearer JWT.
  * À la différence de l'ancien repli via PrescriptionClient.getServices,
@@ -24,7 +24,7 @@ export class ServiceServiceClient {
       process.env.GATEWAY_URL ??
       configService?.get<string>('SERVICE_SERVICE_URL') ??
       process.env.SERVICE_SERVICE_URL ??
-      'https://gateway-bwm4.onrender.com'
+      'https://gateway-5pqs.onrender.com'
     ).replace(/\/$/, '');
   }
 

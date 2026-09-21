@@ -22,7 +22,7 @@ export class UploadClient {
       process.env.GATEWAY_URL ??
       configService?.get<string>('UPLOAD_SERVICE_URL') ??
       process.env.UPLOAD_SERVICE_URL ??
-      'https://gateway-bwm4.onrender.com'
+      'https://gateway-5pqs.onrender.com'
     ).replace(/\/$/, '');
     this.apiKey =
       configService?.get<string>('UPLOAD_API_KEY') ??

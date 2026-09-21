@@ -8,7 +8,7 @@ import { AuthServiceTokenService } from './auth-service-token.service';
 const ACCUEIL_BASE_URL =
   process.env.GATEWAY_URL ??
   process.env.ACCUEIL_BASE_URL ??
-  'https://gateway-bwm4.onrender.com';
+  'https://gateway-5pqs.onrender.com';
 
 @Injectable()
 export class AccueilClient {
