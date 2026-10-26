@@ -24,7 +24,7 @@ export class ServiceServiceClient {
       process.env.GATEWAY_URL ??
       configService?.get<string>('SERVICE_SERVICE_URL') ??
       process.env.SERVICE_SERVICE_URL ??
-      'https://gateway-5pqs.onrender.com'
+      ''
     ).replace(/\/$/, '');
   }
 

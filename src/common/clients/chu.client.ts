@@ -19,12 +19,12 @@ export class ChuClient {
       process.env.GATEWAY_URL ??
       configService?.get<string>('CHU_CMS_SERVICE_URL') ??
       process.env.CHU_CMS_SERVICE_URL ??
-      'https://gateway-5pqs.onrender.com'
+      ''
     ).replace(/\/$/, '');
     this.anapathServiceId =
       configService?.get<string>('ANAPATH_SERVICE_ID') ??
       process.env.ANAPATH_SERVICE_ID ??
-      '9e73904c-71e5-4477-9280-513e4112a468';
+      '';
   }
 
   private async cmsGet(token: string, path: string): Promise<any> {

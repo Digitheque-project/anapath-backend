@@ -23,7 +23,7 @@ import { AuthServiceTokenService } from '../common/clients/auth-service-token.se
 import * as crypto from 'crypto';
 
 const ANAPATH_SERVICE_ID =
-  process.env.ANAPATH_SERVICE_ID ?? '9e73904c-71e5-4477-9280-513e4112a468';
+  process.env.ANAPATH_SERVICE_ID ?? '';
 
 const TYPE_EXAMEN_LABELS: Record<string, string> = {
   BIOPSIE: 'Biopsie',

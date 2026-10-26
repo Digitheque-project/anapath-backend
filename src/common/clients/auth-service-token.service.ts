@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import * as jwt from 'jsonwebtoken';
 
 const ANAPATH_SERVICE_ID =
-  process.env.ANAPATH_SERVICE_ID ?? '9e73904c-71e5-4477-9280-513e4112a468';
+  process.env.ANAPATH_SERVICE_ID ?? '';
 
 /**
  * Jeton de service auto-signé pour les appels sortants sans requête utilisateur

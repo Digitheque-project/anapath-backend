@@ -28,12 +28,12 @@ export class NotificationClient {
       process.env.GATEWAY_URL ??
       this.configService?.get<string>('NOTIFICATION_SERVICE_URL') ??
       process.env.NOTIFICATION_SERVICE_URL ??
-      'https://gateway-5pqs.onrender.com'
+      ''
     ).replace(/\/$/, '');
     this.serviceId =
       this.configService?.get<string>('ANAPATH_SERVICE_ID') ??
       process.env.ANAPATH_SERVICE_ID ??
-      '9e73904c-71e5-4477-9280-513e4112a468';
+      '';
   }
 
   /** Notifications d'un utilisateur donné (role/serviceId requis côté API externe). */

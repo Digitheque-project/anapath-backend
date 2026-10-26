@@ -3,12 +3,16 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { IoAdapter } from '@nestjs/platform-socket.io';
-import { AppModule } from './app.module';
+import { resolveAnapathIdentity } from './config/identity';
 import { Utf8Interceptor } from './common/interceptors/utf8.interceptor';
 import { Utf8Pipe } from './common/pipes/utf8.pipe';
 import { getCorsOrigins } from './common/cors-origins';
 
 async function bootstrap() {
+  // Identité Anapath lue dans le registre AVANT de charger les modules : plusieurs
+  // fichiers lisent ANAPATH_SERVICE_ID dès leur chargement.
+  await resolveAnapathIdentity();
+  const { AppModule } = await import('./app.module');
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Relève la limite du body (défaut 100 Ko) : les photos de profil envoyées en
@@ -35,7 +39,10 @@ async function bootstrap() {
   app.useGlobalPipes(new Utf8Pipe());
   app.useGlobalInterceptors(new Utf8Interceptor());
   
-  app.setGlobalPrefix('api');
+  // Même préfixe que la passerelle (/anapath/...) : le dossier patient et le front
+  // joignent le service par GATEWAY_URL/anapath/api/... (avant : /api seul,
+  // injoignable par la passerelle).
+  app.setGlobalPrefix('anapath/api');
   
   const config = new DocumentBuilder()
     .setTitle('API Anapath')
@@ -47,15 +54,14 @@ async function bootstrap() {
     .build();
   
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+  SwaggerModule.setup('anapath/api/docs', app, document);
   
   const port = process.env.PORT || 3334;
   await app.listen(port);
 
-  const cmsUrl = process.env.GATEWAY_URL ?? process.env.CHU_CMS_SERVICE_URL ?? 'https://gateway-5pqs.onrender.com';
-  console.log(`✅ Service CHU configuré : ${cmsUrl}`);
+  console.log(`✅ Passerelle du CHU : ${process.env.GATEWAY_URL}`);
 
   console.log(`🚀 Backend Anapath démarré sur http://localhost:${port}`);
-  console.log(`📚 Documentation Swagger disponible sur http://localhost:${port}/api/docs`);
+  console.log(`📚 Documentation Swagger disponible sur http://localhost:${port}/anapath/api/docs`);
 }
 bootstrap();

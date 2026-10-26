@@ -45,12 +45,12 @@ export class AuthClient {
       process.env.GATEWAY_URL ??
       configService?.get<string>('USER_SERVICES_URL') ??
       process.env.USER_SERVICES_URL ??
-      'https://gateway-5pqs.onrender.com'
+      ''
     ).replace(/\/$/, '');
     this.anapathServiceId =
       configService?.get<string>('AUTH_ANAPATH_SERVICE_ID') ??
       process.env.AUTH_ANAPATH_SERVICE_ID ??
-      '9e73904c-71e5-4477-9280-513e4112a468';
+      '';
     this.cacheTtlMs = 60000;
     this.timeout = 20000;
   }
