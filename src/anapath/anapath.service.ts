@@ -474,10 +474,17 @@ export class AnapathService {
     const prescripteurId =
       typeof metadata.prescripteurId === 'string' ? metadata.prescripteurId : undefined;
 
+    // Nom saisi dans le formulaire, sinon celui du compte prescripteur, sinon
+    // le médecin saisi à l'Accueil (externe, numéro ONM) ; jamais un identifiant.
+    const saisi = dto.prescripteurSignature?.trim();
+    const nomManuel =
+      typeof metadata.nomMedecinPrescripteur === 'string' ? metadata.nomMedecinPrescripteur.trim() : '';
     const [prescripteurNom, preleveurNom, preleveurUser] = await Promise.all([
-      typeof metadata.prescripteurNom === 'string' && metadata.prescripteurNom.trim()
-        ? metadata.prescripteurNom
-        : this.userServiceClient.getUserNameById(token ?? '', prescripteurId),
+      saisi
+        ? saisi
+        : typeof metadata.prescripteurNom === 'string' && metadata.prescripteurNom.trim()
+          ? metadata.prescripteurNom
+          : nomManuel || this.userServiceClient.getUserNameById(token ?? '', prescripteurId),
       this.userServiceClient.getUserName(token ?? ''),
       this.userServiceClient.getUser(token ?? ''),
     ]);
@@ -488,7 +495,7 @@ export class AnapathService {
       prescripteurSignature:
         typeof prescripteurNom === 'string' && prescripteurNom.trim()
           ? prescripteurNom.trim()
-          : (prescripteurId ?? ''),
+          : '',
       preleveurUserId: preleveurUser?.id ?? preleveurUser?.userId ?? null,
       preleveurSignature: typeof preleveurNom === 'string' ? preleveurNom : '',
       submittedAt: new Date().toISOString(),
@@ -721,7 +728,7 @@ export class AnapathService {
       urgence: prescription.urgence,
       alertes: prescription.alertes,
       chuNom: prescription.chuNom ?? prescription.chu?.nom ?? chuNom ?? null,
-      serviceNom: prescription.serviceNameSource ?? prescription.serviceNameDest ?? serviceNom ?? null,
+      serviceNom: prescription.serviceNameSource ?? serviceNom ?? null,
     };
   }
 

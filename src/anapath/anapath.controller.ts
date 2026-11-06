@@ -138,6 +138,50 @@ export class AnapathController {
   }
 
   @Permissions('anapath:read')
+  @Get('patients/:patientId/identite')
+  @ApiOperation({
+    summary:
+      "Identité du patient (service Accueil) pour une prescription encore en attente, avant qu'un examen n'existe",
+  })
+  @ApiParam({ name: 'patientId', description: 'UUID du patient (service Accueil)' })
+  @Header('Content-Type', 'application/json; charset=utf-8')
+  async getIdentitePatient(
+    @Param('patientId') patientId: string,
+    @CurrentToken() token: string,
+    @Query('chuId') chuId?: string,
+  ) {
+    // Uniquement dans un CHU de l'utilisateur connecté.
+    const chus = this.chuIdsDuJeton(token);
+    const chu = chuId && chus.includes(chuId) ? chuId : chus[0];
+    if (!chu) throw new NotFoundException('CHU introuvable dans la session');
+    const patient = await this.accueilClient.getPatient(patientId, chu);
+    if (!patient) throw new NotFoundException('Patient introuvable');
+    return {
+      ...patient,
+      nomComplet: this.accueilClient.buildNomComplet(patient),
+      age: this.accueilClient.calculateAge(patient.dateNaissance) ?? patient.age ?? null,
+    };
+  }
+
+  /** CHU des services du jeton de l'utilisateur connecté. */
+  private chuIdsDuJeton(token?: string): string[] {
+    try {
+      const payload = JSON.parse(
+        Buffer.from((token ?? '').split('.')[1] ?? '', 'base64url').toString('utf8'),
+      );
+      return [
+        ...new Set<string>(
+          (payload?.services ?? [])
+            .map((s: any) => s?.chu?.id ?? s?.chuId)
+            .filter((id: unknown): id is string => typeof id === 'string' && !!id),
+        ),
+      ];
+    } catch {
+      return [];
+    }
+  }
+
+  @Permissions('anapath:read')
   @Get('patients/:patientId/dossier-patient')
   @ApiOperation({
     summary:
@@ -381,10 +425,7 @@ export class AnapathController {
             urgence:
               (examen.metadata?.urgence as string) ??
               (examen.isExtemporane ? 'STAT' : 'NORMALE'),
-            serviceNom:
-              (examen.metadata?.serviceNom as string) ??
-              (examen.metadata?.serviceId as string) ??
-              '—',
+            serviceNom: (examen.metadata?.serviceNom as string) ?? '—',
             patientId: examen.patientId,
             createdAt: examen.createdAt,
             lu:
@@ -415,9 +456,7 @@ export class AnapathController {
     if (!serviceNom) {
       const sid =
         (examen?.metadata?.serviceIdSource as string) ??
-        (examen?.metadata?.serviceIdDest as string) ??
         (n.metadata?.serviceIdSource as string) ??
-        (n.metadata?.serviceIdDest as string) ??
         '';
       serviceNom = await this.anapathService.getServiceNom(token, sid, chuId);
     }
@@ -490,10 +529,10 @@ export class AnapathController {
     const metadata =
       examen.metadata && typeof examen.metadata === 'object' ? { ...examen.metadata } : {};
     let changed = false;
-    if (!metadata.serviceNom && (metadata.serviceIdSource ?? metadata.serviceIdDest)) {
+    if (!metadata.serviceNom && metadata.serviceIdSource) {
       const serviceNom = await this.anapathService.getServiceNom(
         token,
-        metadata.serviceIdSource ?? metadata.serviceIdDest,
+        metadata.serviceIdSource,
         metadata.chuId,
       );
       if (serviceNom) {

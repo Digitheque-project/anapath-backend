@@ -18,4 +18,9 @@ export class UpdateExamenSpeculumDto {
   @IsOptional()
   @IsString()
   fixation?: string;
+
+  /** Nom du prescripteur, pré-rempli et corrigeable par le technicien. */
+  @IsOptional()
+  @IsString()
+  prescripteurSignature?: string;
 }
